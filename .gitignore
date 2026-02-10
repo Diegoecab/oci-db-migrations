@@ -1,0 +1,18 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+terraform.tfvars
+*.backup
+*.tfplan
+
+# Logs & archives
+*.log
+*.zip
+
+# Editor/OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
