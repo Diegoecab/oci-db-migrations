@@ -1,0 +1,170 @@
+# ============================================================================
+# terraform.tfvars.example
+# Copy to terraform.tfvars and fill in your values.
+# ============================================================================
+
+# --- OCI Authentication ---
+tenancy_ocid     = "ocid1.tenancy.oc1..aaaaaa..."
+user_ocid        = "ocid1.user.oc1..aaaaaa..."
+fingerprint      = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"
+private_key_path = "~/.oci/oci_api_key.pem"
+region           = "us-ashburn-1"
+compartment_ocid = "ocid1.compartment.oc1..aaaaaa..."
+
+# --- Network (private subnet) ---
+vcn_ocid            = "ocid1.vcn.oc1.iad.aaaaaa..."
+private_subnet_ocid = "ocid1.subnet.oc1.iad.aaaaaa..."
+nsg_ids             = []  # Additional NSGs (auto-created migration NSG is always added)
+
+# --- Vault ---
+vault_ocid     = "ocid1.vault.oc1.iad.aaaaaa..."
+vault_key_ocid = "ocid1.key.oc1.iad.aaaaaa..."
+
+# ============================================================================
+# SOURCE DATABASES
+# Define each unique source once. Migrations reference by key.
+# ============================================================================
+source_databases = {
+  aws_oracle_prod = {
+    display_name = "AWS Oracle Production"
+    host         = "10.0.1.100"               # IP for connection string
+    hostname     = "oracledb.example.com"      # FQDN (required by GoldenGate)
+    port         = 1521
+    service_name = "ORCL"
+    username     = "dms_admin"
+    password     = "SecureSourcePassword123!"
+    gg_username  = "GGADMIN"
+    gg_password  = "GGSourcePassword123!"
+  }
+
+  # Uncomment for a second source database:
+  # aws_oracle_dev = {
+  #   display_name = "AWS Oracle Dev"
+  #   host         = "10.0.2.50"
+  #   hostname     = "oracledev.example.com"
+  #   service_name = "DEVDB"
+  #   username     = "dms_admin"
+  #   password     = "SecureDevPassword123!"
+  #   gg_username  = "GGADMIN"
+  #   gg_password  = "GGDevPassword123!"
+  # }
+}
+
+# ============================================================================
+# TARGET DATABASES (ADB with private endpoint)
+# Define each unique target ADB once. Migrations reference by key.
+# ============================================================================
+target_databases = {
+  adb_prod = {
+    display_name = "ADB Production"
+    adb_ocid     = "ocid1.autonomousdatabase.oc1.iad.aaaaaa..."
+    username     = "ADMIN"
+    password     = "SecureADBPassword123!"
+    gg_username  = "GGADMIN"
+    gg_password  = "GGAdbPassword123!"
+  }
+
+  # Uncomment for a second target ADB:
+  # adb_staging = {
+  #   display_name = "ADB Staging"
+  #   adb_ocid     = "ocid1.autonomousdatabase.oc1.iad.bbbbbb..."
+  #   username     = "ADMIN"
+  #   password     = "SecureStagingPassword123!"
+  #   gg_username  = "GGADMIN"
+  #   gg_password  = "GGStagingPassword123!"
+  # }
+}
+
+# ============================================================================
+# MIGRATIONS
+# Each references a source and target by key + its own schema list.
+# Multiple migrations can share the same source or target.
+# ============================================================================
+migrations = {
+  hr_migration = {
+    display_name   = "HR Schema - AWS to ADB"
+    migration_type = "ONLINE"
+    source_db_key  = "aws_oracle_prod"
+    target_db_key  = "adb_prod"
+
+    schemas_to_migrate = ["HR"]
+    exclude_objects    = ["HR.TMP_%", "HR.BACKUP_%"]
+
+    enable_reverse_replication = true
+    # auto_validate = true   # Override global default per migration
+    # auto_start    = false
+  }
+
+  sales_migration = {
+    display_name   = "Sales + Inventory - AWS to ADB"
+    migration_type = "ONLINE"
+    source_db_key  = "aws_oracle_prod"
+    target_db_key  = "adb_prod"
+
+    schemas_to_migrate = ["SALES", "INVENTORY"]
+    exclude_objects    = ["SALES.AUDIT_%"]
+
+    enable_reverse_replication = true
+  }
+
+  # Example: different source to different target
+  # finance_migration = {
+  #   display_name   = "Finance - Dev to Staging"
+  #   migration_type = "OFFLINE"
+  #   source_db_key  = "aws_oracle_dev"
+  #   target_db_key  = "adb_staging"
+  #   schemas_to_migrate = ["FINANCE", "GL"]
+  #   enable_reverse_replication = false
+  # }
+}
+
+# --- GoldenGate Deployment (shared) ---
+goldengate_display_name            = "oci-gg-deployment"
+goldengate_admin_username          = "oggadmin"
+goldengate_admin_password          = "SecureGGPassword123!"
+goldengate_license_model           = "BRING_YOUR_OWN_LICENSE"
+goldengate_cpu_core_count          = 1
+goldengate_is_auto_scaling_enabled = false
+
+# --- GoldenGate Extract/Replicat ---
+extract_config = {
+  extract_name  = "EXTADB"
+  extract_type  = "INTEGRATED"
+  begin_time    = "NOW"
+  trail_name    = "EA"
+  trail_size_mb = 500
+}
+replicat_config = {
+  replicat_name   = "REPAWS"
+  replicat_type   = "PARALLEL"
+  map_parallelism = 4
+  bulk_applies    = true
+}
+gg_schemas_to_replicate = ["HR", "SALES", "INVENTORY"]
+gg_exclude_tables       = ["*.TMP_%", "*.TEMP_%", "*.LOG_%"]
+
+# --- DMS Execution Control ---
+auto_validate_migration = true
+auto_start_migration    = false
+
+# --- Pre-Cutover Validation ---
+pre_cutover_validation_enabled = true
+pre_cutover_max_lag_seconds    = 30
+
+# --- Monitoring (Enterprise) ---
+enable_monitoring              = true
+enable_dms_event_notifications = true
+lag_threshold_seconds          = 60    # WARNING
+lag_critical_threshold_seconds = 300   # CRITICAL
+notification_topic_ocid        = null  # "ocid1.onstopic.oc1.iad.aaaaaa..."
+
+# --- Logging ---
+enable_log_analytics = false
+# log_group_ocid     = "ocid1.loggroup.oc1.iad.aaaaaa..."
+
+# --- Tags ---
+freeform_tags = {
+  "Project"     = "database-migration"
+  "ManagedBy"   = "terraform"
+  "Environment" = "production"
+}

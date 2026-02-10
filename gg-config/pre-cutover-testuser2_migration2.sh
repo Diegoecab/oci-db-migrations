@@ -28,7 +28,7 @@ SRC_STATE=$(oci database-migration connection get --connection-id "$SRC_ID" \
   --query 'data."lifecycle-state"' --raw-output 2>/dev/null)
 echo "  Source connection state: $SRC_STATE"
 echo "[CHECK] Target connection..."
-TGT_ID="ocid1.odmsconnection.oc1.iad.amaaaaaarsnyneyarmzvvsk7gy5xo7amytmzsut3sumtmilqlo76sf4riedq"
+TGT_ID="ocid1.odmsconnection.oc1.iad.amaaaaaarsnyneyaqox3n4nmdrvauupnhpgurthh5wkjo3u2tbzo3tdtvfqa"
 TGT_STATE=$(oci database-migration connection get --connection-id "$TGT_ID" \
   --query 'data."lifecycle-state"' --raw-output 2>/dev/null)
 echo "  Target connection state: $TGT_STATE"

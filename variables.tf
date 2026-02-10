@@ -272,6 +272,13 @@ variable "gg_exclude_tables" {
   default     = ["*.TMP_%", "*.TEMP_%", "*.LOG_%"]
 }
 
+variable "gg_process_rerun_token" {
+  description = "Change this value to force re-running GG process creation (null_resource)."
+  type        = string
+  default     = ""
+}
+
+
 # ----------------------------------------------------------------------------
 # Object Storage
 # ----------------------------------------------------------------------------

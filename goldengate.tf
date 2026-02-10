@@ -1,18 +1,9 @@
 # ============================================================================
 # OCI GoldenGate - Deployment, Connections, Assignments, and Processes
-# ============================================================================
-#
-# For migrations with enable_reverse_replication = true, this file also creates
-# GoldenGate Extract and Replicat processes via the GG REST API. This enables
-# reverse (fallback) replication from ADB target back to the source Oracle DB.
-#
-# The GG REST API is documented here:
-#   https://docs.oracle.com/en/cloud/paas/goldengate-service/uaest/
-#
-# IMPORTANT: The Terraform OCI provider does NOT have native resources for
-# GoldenGate Extract/Replicat processes. We use null_resource + local-exec
-# calling the GG REST API via curl. This requires network connectivity from
-# the machine running Terraform to the GG private endpoint.
+# Create Extract/Replicat via POST on NAMED resource (no "name" field in JSON)
+# Based on observed behavior:
+#  - /extracts (collection) returns 405
+#  - POST /extracts/<NAME> is accepted, but schema rejects "name" property
 # ============================================================================
 
 # ----------------------------------------------------------------------------
@@ -64,11 +55,12 @@ resource "oci_golden_gate_connection" "adb" {
   database_id     = each.value.adb_ocid
   username        = each.value.gg_username
   password        = each.value.gg_password
-  routing_method  = "DEDICATED_ENDPOINT"
-  subnet_id       = var.private_subnet_ocid
-  nsg_ids         = local.all_nsg_ids
-  vault_id        = var.vault_ocid
-  key_id          = var.vault_key_ocid
+
+  routing_method = "DEDICATED_ENDPOINT"
+  subnet_id      = var.private_subnet_ocid
+  nsg_ids        = local.all_nsg_ids
+  vault_id       = var.vault_ocid
+  key_id         = var.vault_key_ocid
 
   lifecycle { ignore_changes = [password] }
 }
@@ -76,17 +68,19 @@ resource "oci_golden_gate_connection" "adb" {
 resource "oci_golden_gate_connection" "ext_oracle" {
   for_each        = var.source_databases
   compartment_id  = var.compartment_ocid
-  display_name    = "gg-ext-oracle-${each.key}"
+  display_name    = "gg-src-${each.key}"
   connection_type = "ORACLE"
   technology_type = "ORACLE_DATABASE"
   username        = each.value.gg_username
   password        = each.value.gg_password
+
   connection_string = format(
     "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=%s)(PORT=%d))(CONNECT_DATA=(SERVICE_NAME=%s)))",
     coalesce(try(each.value.hostname, null), each.value.host),
     try(each.value.port, 1521),
     each.value.service_name
   )
+
   routing_method = "DEDICATED_ENDPOINT"
   subnet_id      = var.private_subnet_ocid
   nsg_ids        = local.all_nsg_ids
@@ -97,8 +91,7 @@ resource "oci_golden_gate_connection" "ext_oracle" {
 }
 
 # ----------------------------------------------------------------------------
-# Stabilization Delay
-# OCI needs time to make connections usable after creation
+# Stabilization Delay (avoid 409/Reflection timing issues)
 # ----------------------------------------------------------------------------
 resource "time_sleep" "wait_for_connections" {
   depends_on = [
@@ -119,10 +112,12 @@ resource "oci_golden_gate_database_registration" "adb" {
   database_id    = var.target_databases[each.key].adb_ocid
   username       = var.target_databases[each.key].gg_username
   password       = var.target_databases[each.key].gg_password
+
   fqdn = lower(try(
     regex("host=([^)]+)", data.oci_database_autonomous_database.target_adb[each.key].connection_strings[0].all_connection_strings["HIGH"])[0],
     "${data.oci_database_autonomous_database.target_adb[each.key].db_name}.adb.${var.region}.oraclecloud.com"
   ))
+
   depends_on = [time_sleep.wait_for_connections]
   lifecycle { ignore_changes = [password] }
 }
@@ -132,15 +127,18 @@ resource "oci_golden_gate_database_registration" "ext_oracle" {
   compartment_id = var.compartment_ocid
   display_name   = "gg-reg-ext-${each.key}"
   alias_name     = upper(replace("ext_${each.key}", "-", "_"))
-  fqdn           = var.source_databases[each.key].hostname
-  username       = var.source_databases[each.key].gg_username
-  password       = var.source_databases[each.key].gg_password
+
+  fqdn     = var.source_databases[each.key].hostname
+  username = var.source_databases[each.key].gg_username
+  password = var.source_databases[each.key].gg_password
+
   connection_string = format(
     "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=%s)(PORT=%d))(CONNECT_DATA=(SERVICE_NAME=%s)))",
     coalesce(try(var.source_databases[each.key].host, null), var.source_databases[each.key].hostname),
     var.source_databases[each.key].port,
     var.source_databases[each.key].service_name
   )
+
   depends_on = [time_sleep.wait_for_connections]
   lifecycle { ignore_changes = [password] }
 }
@@ -164,20 +162,7 @@ resource "oci_golden_gate_connection_assignment" "ext_oracle" {
 
 # ============================================================================
 # GoldenGate Extract & Replicat Processes (Reverse/Fallback Replication)
-#
-# Created via GG REST API for migrations with enable_reverse_replication=true
-#
-# Reverse replication flow:
-#   ADB (source for fallback) → Extract → Trail → Replicat → Source Oracle DB
-#
-# The alias names for credentials match the connection display names registered
-# in the GG deployment via connection_assignments above.
-#
-# REST API reference:
-#   https://docs.oracle.com/en/cloud/paas/goldengate-service/uaest/
 # ============================================================================
-
-# --- Wait for assignments to complete before creating processes ---
 resource "time_sleep" "wait_for_assignments" {
   count = length(local.fallback_migrations) > 0 ? 1 : 0
   depends_on = [
@@ -188,7 +173,8 @@ resource "time_sleep" "wait_for_assignments" {
 }
 
 # ----------------------------------------------------------------------------
-# Create Extract process (captures changes FROM the ADB target for fallback)
+# Create Extract process (ADMIN SERVICE REST)
+# IMPORTANT: create via POST on /extracts/<NAME>, and JSON must NOT include "name"
 # ----------------------------------------------------------------------------
 resource "null_resource" "gg_fallback_extract" {
   for_each = local.fallback_migrations
@@ -199,92 +185,126 @@ resource "null_resource" "gg_fallback_extract" {
     deployment_id = oci_golden_gate_deployment.gg.id
     migration_key = each.key
     target_db_key = each.value.target_db_key
-    run_id        = var.force_rerun_validate_start
+    rerun_token   = var.gg_process_rerun_token
   }
 
   provisioner "local-exec" {
     command = <<-EOC
-      set -e
+      set -euo pipefail
+      LOGFILE="${path.module}/gg_extract_${each.key}.log"
+      : > "$LOGFILE"
 
       GG_URL="${oci_golden_gate_deployment.gg.deployment_url}"
+      GG_URL="$${GG_URL%/}"
       GG_USER="${var.goldengate_admin_username}"
       GG_PASS="${var.goldengate_admin_password}"
 
-      # Extract name: up to 8 chars, uppercase
       EXTRACT_NAME=$(echo "EX${upper(substr(each.key, 0, 6))}" | head -c 8 | tr '[:lower:]' '[:upper:]')
       TRAIL_NAME="${var.extract_config.trail_name}"
-      ADB_ALIAS="${upper(replace("gg-adb-${each.value.target_db_key}", "-", "_"))}"
+      ADB_ALIAS="${oci_golden_gate_connection.adb[each.value.target_db_key].display_name}"
 
-      # Schemas to replicate for this migration
-      SCHEMAS_JSON=""
-      %{for obj in each.value.include_allow_objects~}
-      SCHEMA_OWNER=$(echo "${obj}" | cut -d'.' -f1)
-      SCHEMAS_JSON="$SCHEMAS_JSON\"Table $SCHEMA_OWNER.*;\","
-      %{endfor~}
-      # Remove trailing comma
-      SCHEMAS_JSON=$(echo "$SCHEMAS_JSON" | sed 's/,$//')
+      echo "--- Extract creation for ${each.key} ---" >> "$LOGFILE"
+      echo "GG_URL=$GG_URL" >> "$LOGFILE"
+      echo "EXTRACT_NAME=$EXTRACT_NAME" >> "$LOGFILE"
+      echo "TRAIL_NAME=$TRAIL_NAME" >> "$LOGFILE"
+      echo "ADB_ALIAS=$ADB_ALIAS" >> "$LOGFILE"
 
-      echo "[GG-EXTRACT] Creating extract $EXTRACT_NAME for migration ${each.key}..."
-      echo "[GG-EXTRACT] GG URL: $GG_URL"
-      echo "[GG-EXTRACT] Alias: $ADB_ALIAS"
-
-      # Check if extract already exists
-      HTTP_CODE=$(curl -s -o /dev/null -w "%%{http_code}" \
+      HTTP_PING=$(curl -k -m 15 -s -o /dev/null -w "%%{http_code}" \
         -u "$GG_USER:$GG_PASS" \
-        -H "Content-Type: application/json" \
-        "$GG_URL/services/v2/extracts/$EXTRACT_NAME" 2>/dev/null || echo "000")
+        "$GG_URL/services/adminsrvr/v2/extracts" 2>>"$LOGFILE" || echo "000")
+      echo "PING(adminsrvr/v2/extracts)=$HTTP_PING" >> "$LOGFILE"
 
-      if [ "$HTTP_CODE" = "200" ]; then
-        echo "[GG-EXTRACT] Extract $EXTRACT_NAME already exists. Skipping creation."
+      exists() {
+        local path="$1"
+        curl -k -m 15 -s -o /dev/null -w "%%{http_code}" \
+          -u "$GG_USER:$GG_PASS" -H "Accept: application/json" \
+          "$GG_URL$path/$EXTRACT_NAME" 2>>"$LOGFILE" || echo "000"
+      }
+
+      CODE1=$(exists "/services/adminsrvr/v2/extracts")
+      CODE2=$(exists "/services/v2/extracts")
+      echo "EXISTS(adminsrvr)=$CODE1 EXISTS(services/v2)=$CODE2" >> "$LOGFILE"
+      if [ "$CODE1" = "200" ] || [ "$CODE2" = "200" ]; then
+        echo "Extract $EXTRACT_NAME already exists. Skipping." | tee -a "$LOGFILE"
         exit 0
       fi
 
-      # Create Extract via REST API
-      EXTRACT_JSON=$(cat <<-EJSON
-      {
-        "config": [
-          "Extract $EXTRACT_NAME",
-          "ExtTrail $TRAIL_NAME",
-          "UserIdAlias $ADB_ALIAS",
-          $SCHEMAS_JSON
-        ],
-        "source": {"tranlogs": "integrated"},
-        "credentials": {"alias": "$ADB_ALIAS"},
-        "registration": {"optimized": false},
-        "begin": "now",
-        "targets": [{"name": "$TRAIL_NAME"}],
-        "status": "stopped"
-      }
+      TABLE_LINES=""
+      %{for obj in each.value.include_allow_objects~}
+      SCHEMA_OWNER=$(echo "${obj}" | cut -d'.' -f1)
+      TABLE_LINES="$${TABLE_LINES}\n    \"TABLE $${SCHEMA_OWNER}.*;\","
+      %{endfor~}
+      TABLE_LINES=$(printf "%b" "$TABLE_LINES" | sed '$s/,$//')
+
+      # NOTE: No "name" field here (your API rejects it)
+      EXTRACT_JSON=$(cat <<EJSON
+{
+  "config": [
+    "EXTRACT $EXTRACT_NAME",
+    "USERIDALIAS $ADB_ALIAS",
+    "EXTTRAIL $TRAIL_NAME",
+$(printf "%b" "$TABLE_LINES")
+  ],
+  "source": { "tranlogs": "integrated" },
+  "begin": "now",
+  "status": "stopped"
+}
 EJSON
+)
+
+      try_create() {
+        local method="$1"
+        local url="$2"
+        local resp http body
+        resp=$(curl -k -m 30 -s -w "\\n%%{http_code}" \
+          -u "$GG_USER:$GG_PASS" \
+          -H "Content-Type: application/json" -H "Accept: application/json" \
+          -X "$method" "$url" -d "$EXTRACT_JSON" 2>>"$LOGFILE" || true)
+        http=$(echo "$resp" | tail -1)
+        body=$(echo "$resp" | sed '$d')
+        echo "TRY $method $url -> HTTP $http" >> "$LOGFILE"
+        echo "$body" >> "$LOGFILE"
+
+        if [ "$http" = "200" ] || [ "$http" = "201" ] || [ "$http" = "202" ]; then
+          return 0
+        fi
+        if [ "$http" = "409" ] || echo "$body" | grep -qiE "already exists|exists"; then
+          return 0
+        fi
+        return 1
+      }
+
+      # Only try NAMED endpoints (collection is 405 in your deployment)
+      ENDPOINTS=(
+        "$GG_URL/services/adminsrvr/v2/extracts/$EXTRACT_NAME"
+        "$GG_URL/services/v2/extracts/$EXTRACT_NAME"
       )
+      METHODS=("POST" "PATCH")
 
-      RESPONSE=$(curl -s -w "\n%%{http_code}" \
-        -u "$GG_USER:$GG_PASS" \
-        -H "Content-Type: application/json" \
-        -H "Accept: application/json" \
-        -X POST "$GG_URL/services/v2/extracts/$EXTRACT_NAME" \
-        -d "$EXTRACT_JSON" 2>/dev/null || echo "CURL_FAILED")
+      ok=1
+      for ep in "$${ENDPOINTS[@]}"; do
+        for m in "$${METHODS[@]}"; do
+          if try_create "$m" "$ep"; then
+            ok=0
+            break 2
+          else
+            echo "FAILED on $m $ep - continue." | tee -a "$LOGFILE"
+          fi
+        done
+      done
 
-      HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-      BODY=$(echo "$RESPONSE" | head -n -1)
-
-      echo "[GG-EXTRACT] Response code: $HTTP_CODE"
-      echo "[GG-EXTRACT] Body: $BODY"
-
-      if [ "$HTTP_CODE" = "201" ] || [ "$HTTP_CODE" = "200" ]; then
-        echo "[GG-EXTRACT] Extract $EXTRACT_NAME created successfully (stopped)."
-      else
-        echo "[WARN] Extract creation returned $HTTP_CODE. Check GG console manually."
-        echo "[INFO] This may be expected if GG deployment is not yet fully ready."
+      if [ "$ok" -ne 0 ]; then
+        echo "FAILED: Could not create Extract. See log: $LOGFILE" | tee -a "$LOGFILE"
+        exit 1
       fi
     EOC
-
-    on_failure = continue
+    on_failure = fail
   }
 }
 
 # ----------------------------------------------------------------------------
-# Create Replicat process (applies changes TO the source Oracle DB for fallback)
+# Create Replicat process (ADMIN SERVICE REST)
+# IMPORTANT: create via POST on /replicats/<NAME>, and JSON must NOT include "name"
 # ----------------------------------------------------------------------------
 resource "null_resource" "gg_fallback_replicat" {
   for_each = local.fallback_migrations
@@ -298,150 +318,157 @@ resource "null_resource" "gg_fallback_replicat" {
     deployment_id = oci_golden_gate_deployment.gg.id
     migration_key = each.key
     source_db_key = each.value.source_db_key
-    run_id        = var.force_rerun_validate_start
+    rerun_token   = var.gg_process_rerun_token
   }
 
   provisioner "local-exec" {
     command = <<-EOC
-      set -e
+      set -euo pipefail
+      LOGFILE="${path.module}/gg_replicat_${each.key}.log"
+      : > "$LOGFILE"
 
       GG_URL="${oci_golden_gate_deployment.gg.deployment_url}"
+      GG_URL="$${GG_URL%/}"
       GG_USER="${var.goldengate_admin_username}"
       GG_PASS="${var.goldengate_admin_password}"
 
-      # Replicat name: up to 8 chars, uppercase
       REPLICAT_NAME=$(echo "RP${upper(substr(each.key, 0, 6))}" | head -c 8 | tr '[:lower:]' '[:upper:]')
       TRAIL_NAME="${var.extract_config.trail_name}"
-      EXT_ALIAS="${upper(replace("gg-ext-oracle-${each.value.source_db_key}", "-", "_"))}"
+      EXT_ALIAS="${oci_golden_gate_connection.ext_oracle[each.value.source_db_key].display_name}"
 
-      # Schemas to replicate
-      MAP_JSON=""
+      MAP_LINES=""
       %{for obj in each.value.include_allow_objects~}
       SCHEMA_OWNER=$(echo "${obj}" | cut -d'.' -f1)
-      MAP_JSON="$MAP_JSON\"MAP $SCHEMA_OWNER.*, TARGET $SCHEMA_OWNER.*;\","
+      MAP_LINES="$${MAP_LINES}\n    \"MAP $${SCHEMA_OWNER}.*, TARGET $${SCHEMA_OWNER}.*;\","
       %{endfor~}
-      MAP_JSON=$(echo "$MAP_JSON" | sed 's/,$//')
+      MAP_LINES=$(printf "%b" "$MAP_LINES" | sed '$s/,$//')
 
-      # Checkpoint table: use first schema owner
-      FIRST_SCHEMA=$(echo "${try(each.value.include_allow_objects[0], "GGADMIN")}" | cut -d'.' -f1)
+      FIRST_SCHEMA=$(echo "${try(each.value.include_allow_objects[0], "GGADMIN.DUMMY")}" | cut -d'.' -f1)
       CHECKPOINT_TABLE="$FIRST_SCHEMA.GG_CHECKPOINT"
 
-      echo "[GG-REPLICAT] Creating replicat $REPLICAT_NAME for migration ${each.key}..."
-      echo "[GG-REPLICAT] GG URL: $GG_URL"
-      echo "[GG-REPLICAT] Alias: $EXT_ALIAS"
+      echo "--- Replicat creation for ${each.key} ---" >> "$LOGFILE"
+      echo "GG_URL=$GG_URL" >> "$LOGFILE"
+      echo "REPLICAT_NAME=$REPLICAT_NAME" >> "$LOGFILE"
+      echo "TRAIL_NAME=$TRAIL_NAME" >> "$LOGFILE"
+      echo "EXT_ALIAS=$EXT_ALIAS" >> "$LOGFILE"
+      echo "CHECKPOINT_TABLE=$CHECKPOINT_TABLE" >> "$LOGFILE"
 
-      # Check if replicat already exists
-      HTTP_CODE=$(curl -s -o /dev/null -w "%%{http_code}" \
-        -u "$GG_USER:$GG_PASS" \
-        -H "Content-Type: application/json" \
-        "$GG_URL/services/v2/replicats/$REPLICAT_NAME" 2>/dev/null || echo "000")
-
-      if [ "$HTTP_CODE" = "200" ]; then
-        echo "[GG-REPLICAT] Replicat $REPLICAT_NAME already exists. Skipping creation."
+      exists() {
+        local path="$1"
+        curl -k -m 15 -s -o /dev/null -w "%%{http_code}" \
+          -u "$GG_USER:$GG_PASS" -H "Accept: application/json" \
+          "$GG_URL$path/$REPLICAT_NAME" 2>>"$LOGFILE" || echo "000"
+      }
+      CODE1=$(exists "/services/adminsrvr/v2/replicats")
+      CODE2=$(exists "/services/v2/replicats")
+      echo "EXISTS(adminsrvr)=$CODE1 EXISTS(services/v2)=$CODE2" >> "$LOGFILE"
+      if [ "$CODE1" = "200" ] || [ "$CODE2" = "200" ]; then
+        echo "Replicat $REPLICAT_NAME already exists. Skipping." | tee -a "$LOGFILE"
         exit 0
       fi
 
-      # Create Replicat via REST API
-      REPLICAT_JSON=$(cat <<-RJSON
-      {
-        "config": [
-          "Replicat $REPLICAT_NAME",
-          "UserIdAlias $EXT_ALIAS",
-          "DiscardFile ./dirrpt/$${REPLICAT_NAME}_discard.txt, PURGE",
-          $MAP_JSON
-        ],
-        "source": {"name": "$TRAIL_NAME"},
-        "credentials": {"alias": "$EXT_ALIAS"},
-        "checkpoint": {"table": "$CHECKPOINT_TABLE"},
-        "mode": {
-          "type": "nonintegrated",
-          "parallel": false
-        },
-        "registration": "none",
-        "begin": "now",
-        "status": "stopped"
-      }
+      # NOTE: No "name" field
+      REPLICAT_JSON=$(cat <<RJSON
+{
+  "config": [
+    "REPLICAT $REPLICAT_NAME",
+    "USERIDALIAS $EXT_ALIAS",
+    "DISCARDFILE ./dirrpt/$${REPLICAT_NAME}_discard.txt, PURGE",
+$(printf "%b" "$MAP_LINES")
+  ],
+  "source": { "name": "$TRAIL_NAME" },
+  "checkpoint": { "table": "$CHECKPOINT_TABLE" },
+  "mode": { "type": "nonintegrated", "parallel": false },
+  "begin": "now",
+  "status": "stopped"
+}
 RJSON
+)
+
+      try_create() {
+        local method="$1"
+        local url="$2"
+        local resp http body
+        resp=$(curl -k -m 30 -s -w "\\n%%{http_code}" \
+          -u "$GG_USER:$GG_PASS" \
+          -H "Content-Type: application/json" -H "Accept: application/json" \
+          -X "$method" "$url" -d "$REPLICAT_JSON" 2>>"$LOGFILE" || true)
+        http=$(echo "$resp" | tail -1)
+        body=$(echo "$resp" | sed '$d')
+        echo "TRY $method $url -> HTTP $http" >> "$LOGFILE"
+        echo "$body" >> "$LOGFILE"
+
+        if [ "$http" = "200" ] || [ "$http" = "201" ] || [ "$http" = "202" ]; then
+          return 0
+        fi
+        if [ "$http" = "409" ] || echo "$body" | grep -qiE "already exists|exists"; then
+          return 0
+        fi
+        return 1
+      }
+
+      ENDPOINTS=(
+        "$GG_URL/services/adminsrvr/v2/replicats/$REPLICAT_NAME"
+        "$GG_URL/services/v2/replicats/$REPLICAT_NAME"
       )
+      METHODS=("POST" "PATCH")
 
-      RESPONSE=$(curl -s -w "\n%%{http_code}" \
-        -u "$GG_USER:$GG_PASS" \
-        -H "Content-Type: application/json" \
-        -H "Accept: application/json" \
-        -X POST "$GG_URL/services/v2/replicats/$REPLICAT_NAME" \
-        -d "$REPLICAT_JSON" 2>/dev/null || echo "CURL_FAILED")
+      ok=1
+      for ep in "$${ENDPOINTS[@]}"; do
+        for m in "$${METHODS[@]}"; do
+          if try_create "$m" "$ep"; then
+            ok=0
+            break 2
+          else
+            echo "FAILED on $m $ep - continue." | tee -a "$LOGFILE"
+          fi
+        done
+      done
 
-      HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-      BODY=$(echo "$RESPONSE" | head -n -1)
-
-      echo "[GG-REPLICAT] Response code: $HTTP_CODE"
-      echo "[GG-REPLICAT] Body: $BODY"
-
-      if [ "$HTTP_CODE" = "201" ] || [ "$HTTP_CODE" = "200" ]; then
-        echo "[GG-REPLICAT] Replicat $REPLICAT_NAME created successfully (stopped)."
-        echo "[INFO] To start fallback replication, run:"
-        echo "  curl -u $GG_USER:<password> -H 'Content-Type: application/json' -X POST $GG_URL/services/v2/commands/execute -d '{\"name\":\"start\",\"processName\":\"$EXTRACT_NAME\"}'"
-        echo "  curl -u $GG_USER:<password> -H 'Content-Type: application/json' -X POST $GG_URL/services/v2/commands/execute -d '{\"name\":\"start\",\"processName\":\"$REPLICAT_NAME\"}'"
-      else
-        echo "[WARN] Replicat creation returned $HTTP_CODE. Check GG console manually."
+      if [ "$ok" -ne 0 ]; then
+        echo "FAILED: Could not create Replicat. See log: $LOGFILE" | tee -a "$LOGFILE"
+        exit 1
       fi
     EOC
-
-    on_failure = continue
+    on_failure = fail
   }
 }
 
 # ----------------------------------------------------------------------------
-# GG Parameter Files (generated per fallback migration for reference)
+# GG Parameter Files (local reference)
 # ----------------------------------------------------------------------------
 resource "local_file" "extract_params" {
-  for_each = local.fallback_migrations
-
+  for_each        = local.fallback_migrations
   filename        = "${path.module}/gg-config/extract-${each.key}.prm"
   file_permission = "0644"
 
   content = <<-EOT
--- GoldenGate Extract Parameter File (Reverse/Fallback)
--- Migration: ${each.key}
--- Source for Extract: ADB ${each.value.target_db_key} (captures changes for fallback)
--- Auto-generated by Terraform
-
+-- Auto-generated
 EXTRACT EX${upper(substr(each.key, 0, 6))}
-USERIDALIAS ${upper(replace("gg-adb-${each.value.target_db_key}", "-", "_"))}
+USERIDALIAS ${oci_golden_gate_connection.adb[each.value.target_db_key].display_name}
 EXTTRAIL ${var.extract_config.trail_name}
-
 %{for obj in each.value.include_allow_objects~}
-TABLE ${split(".", obj)[0]}.*;
+TABLE ${split(".", obj)[0]}.*
 %{endfor~}
-
--- End of file
-  EOT
+EOT
 
   depends_on = [oci_golden_gate_deployment.gg]
 }
 
 resource "local_file" "replicat_params" {
-  for_each = local.fallback_migrations
-
+  for_each        = local.fallback_migrations
   filename        = "${path.module}/gg-config/replicat-${each.key}.prm"
   file_permission = "0644"
 
   content = <<-EOT
--- GoldenGate Replicat Parameter File (Reverse/Fallback)
--- Migration: ${each.key}
--- Target for Replicat: Source Oracle DB ${each.value.source_db_key}
--- Auto-generated by Terraform
-
+-- Auto-generated
 REPLICAT RP${upper(substr(each.key, 0, 6))}
-USERIDALIAS ${upper(replace("gg-ext-oracle-${each.value.source_db_key}", "-", "_"))}
+USERIDALIAS ${oci_golden_gate_connection.ext_oracle[each.value.source_db_key].display_name}
 DISCARDFILE ./dirrpt/RP${upper(substr(each.key, 0, 6))}_discard.txt, PURGE
-
 %{for obj in each.value.include_allow_objects~}
-MAP ${split(".", obj)[0]}.*, TARGET ${split(".", obj)[0]}.*;
+MAP ${split(".", obj)[0]}.*, TARGET ${split(".", obj)[0]}.*
 %{endfor~}
-
--- End of file
-  EOT
+EOT
 
   depends_on = [oci_golden_gate_deployment.gg]
 }
