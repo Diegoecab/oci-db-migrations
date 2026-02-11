@@ -13,9 +13,18 @@ locals {
   gg_target_db_keys = toset(keys(var.target_databases))
   gg_source_db_keys = toset(keys(var.source_databases))
 
-  # Migrations with reverse replication enabled (fallback)
   fallback_migrations = {
     for k, m in var.migrations : k => m if try(m.enable_reverse_replication, false)
+  }
+
+  # Unique 8-char names: EX/RP + 6 hex chars from md5(key)
+  gg_extract_name = {
+    for k, m in local.fallback_migrations :
+    k => upper("EX${substr(md5(k), 0, 6)}")
+  }
+  gg_replicat_name = {
+    for k, m in local.fallback_migrations :
+    k => upper("RP${substr(md5(k), 0, 6)}")
   }
 }
 
@@ -163,6 +172,7 @@ resource "oci_golden_gate_connection_assignment" "ext_oracle" {
 # ============================================================================
 # GoldenGate Extract & Replicat Processes (Reverse/Fallback Replication)
 # ============================================================================
+
 resource "time_sleep" "wait_for_assignments" {
   count = length(local.fallback_migrations) > 0 ? 1 : 0
   depends_on = [
@@ -199,7 +209,7 @@ resource "null_resource" "gg_fallback_extract" {
       GG_USER="${var.goldengate_admin_username}"
       GG_PASS="${var.goldengate_admin_password}"
 
-      EXTRACT_NAME=$(echo "EX${upper(substr(each.key, 0, 6))}" | head -c 8 | tr '[:lower:]' '[:upper:]')
+      EXTRACT_NAME="${local.gg_extract_name[each.key]}"
       TRAIL_NAME="${var.extract_config.trail_name}"
       ADB_ALIAS="${oci_golden_gate_connection.adb[each.value.target_db_key].display_name}"
 
@@ -229,10 +239,16 @@ resource "null_resource" "gg_fallback_extract" {
         exit 0
       fi
 
+      # Build TABLE lines from allowlist:
+      # - "SCHEMA.*" => TABLE SCHEMA.*;
+      # - "SCHEMA.TABLE" => TABLE SCHEMA.TABLE;
       TABLE_LINES=""
       %{for obj in each.value.include_allow_objects~}
-      SCHEMA_OWNER=$(echo "${obj}" | cut -d'.' -f1)
-      TABLE_LINES="$${TABLE_LINES}\n    \"TABLE $${SCHEMA_OWNER}.*;\","
+      %{ if length(split(".", obj)) > 1 && split(".", obj)[1] != "*" ~}
+      TABLE_LINES="$${TABLE_LINES}\n    \"TABLE ${split(".", obj)[0]}.${split(".", obj)[1]};\","
+      %{ else ~}
+      TABLE_LINES="$${TABLE_LINES}\n    \"TABLE ${split(".", obj)[0]}.*;\","
+      %{ endif ~}
       %{endfor~}
       TABLE_LINES=$(printf "%b" "$TABLE_LINES" | sed '$s/,$//')
 
@@ -332,14 +348,20 @@ resource "null_resource" "gg_fallback_replicat" {
       GG_USER="${var.goldengate_admin_username}"
       GG_PASS="${var.goldengate_admin_password}"
 
-      REPLICAT_NAME=$(echo "RP${upper(substr(each.key, 0, 6))}" | head -c 8 | tr '[:lower:]' '[:upper:]')
+      REPLICAT_NAME="${local.gg_replicat_name[each.key]}"
       TRAIL_NAME="${var.extract_config.trail_name}"
       EXT_ALIAS="${oci_golden_gate_connection.ext_oracle[each.value.source_db_key].display_name}"
 
+      # Build MAP lines from allowlist:
+      # - "SCHEMA.*" => MAP SCHEMA.*, TARGET SCHEMA.*;
+      # - "SCHEMA.TABLE" => MAP SCHEMA.TABLE, TARGET SCHEMA.TABLE;
       MAP_LINES=""
       %{for obj in each.value.include_allow_objects~}
-      SCHEMA_OWNER=$(echo "${obj}" | cut -d'.' -f1)
-      MAP_LINES="$${MAP_LINES}\n    \"MAP $${SCHEMA_OWNER}.*, TARGET $${SCHEMA_OWNER}.*;\","
+      %{ if length(split(".", obj)) > 1 && split(".", obj)[1] != "*" ~}
+      MAP_LINES="$${MAP_LINES}\n    \"MAP ${split(".", obj)[0]}.${split(".", obj)[1]}, TARGET ${split(".", obj)[0]}.${split(".", obj)[1]};\","
+      %{ else ~}
+      MAP_LINES="$${MAP_LINES}\n    \"MAP ${split(".", obj)[0]}.*, TARGET ${split(".", obj)[0]}.*;\","
+      %{ endif ~}
       %{endfor~}
       MAP_LINES=$(printf "%b" "$MAP_LINES" | sed '$s/,$//')
 
@@ -444,11 +466,15 @@ resource "local_file" "extract_params" {
 
   content = <<-EOT
 -- Auto-generated
-EXTRACT EX${upper(substr(each.key, 0, 6))}
+EXTRACT ${local.gg_extract_name[each.key]}
 USERIDALIAS ${oci_golden_gate_connection.adb[each.value.target_db_key].display_name}
 EXTTRAIL ${var.extract_config.trail_name}
 %{for obj in each.value.include_allow_objects~}
-TABLE ${split(".", obj)[0]}.*
+%{ if length(split(".", obj)) > 1 && split(".", obj)[1] != "*" ~}
+TABLE ${split(".", obj)[0]}.${split(".", obj)[1]};
+%{ else ~}
+TABLE ${split(".", obj)[0]}.*;
+%{ endif ~}
 %{endfor~}
 EOT
 
@@ -462,14 +488,17 @@ resource "local_file" "replicat_params" {
 
   content = <<-EOT
 -- Auto-generated
-REPLICAT RP${upper(substr(each.key, 0, 6))}
+REPLICAT ${local.gg_replicat_name[each.key]}
 USERIDALIAS ${oci_golden_gate_connection.ext_oracle[each.value.source_db_key].display_name}
-DISCARDFILE ./dirrpt/RP${upper(substr(each.key, 0, 6))}_discard.txt, PURGE
+DISCARDFILE ./dirrpt/${local.gg_replicat_name[each.key]}_discard.txt, PURGE
 %{for obj in each.value.include_allow_objects~}
-MAP ${split(".", obj)[0]}.*, TARGET ${split(".", obj)[0]}.*
+%{ if length(split(".", obj)) > 1 && split(".", obj)[1] != "*" ~}
+MAP ${split(".", obj)[0]}.${split(".", obj)[1]}, TARGET ${split(".", obj)[0]}.${split(".", obj)[1]};
+%{ else ~}
+MAP ${split(".", obj)[0]}.*, TARGET ${split(".", obj)[0]}.*;
+%{ endif ~}
 %{endfor~}
 EOT
 
   depends_on = [oci_golden_gate_deployment.gg]
 }
-

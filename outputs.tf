@@ -51,6 +51,7 @@ output "gg_reverse_replication" {
 }
 
 output "gg_config_files" {
+  description = "Generated GoldenGate parameter files for fallback migrations"
   value = {
     for k in setunion(keys(local_file.extract_params), keys(local_file.replicat_params)) : k => {
       extract_params  = try(local_file.extract_params[k].filename, null)
@@ -69,13 +70,22 @@ output "migration_nsg_id" {
 output "monitoring" {
   description = "Monitoring alarm and event rule IDs"
   value = {
-    dms_lag_warn_alarms = { for k, a in oci_monitoring_alarm.dms_lag_warn : k => a.id }
-    dms_lag_crit_alarms = { for k, a in oci_monitoring_alarm.dms_lag_crit : k => a.id }
-    gg_health_alarm     = var.enable_monitoring ? oci_monitoring_alarm.gg_health[0].id : null
+    # Alarms (from monitoring.tf)
+    dms_health_alarms          = { for k, a in oci_monitoring_alarm.dms_health : k => a.id }
+    dms_replication_lag_warn   = { for k, a in oci_monitoring_alarm.dms_replication_lag_warn : k => a.id }
+    dms_replication_lag_crit   = { for k, a in oci_monitoring_alarm.dms_replication_lag_crit : k => a.id }
+    gg_cpu_warn_alarm          = var.enable_monitoring && var.notification_topic_ocid != null ? oci_monitoring_alarm.gg_cpu_warn[0].id : null
+    gg_cpu_critical_alarm      = var.enable_monitoring && var.notification_topic_ocid != null ? oci_monitoring_alarm.gg_cpu_critical[0].id : null
+    gg_extract_lag_alarm       = var.enable_monitoring && var.notification_topic_ocid != null ? oci_monitoring_alarm.gg_extract_lag[0].id : null
+    gg_replicat_lag_alarm      = var.enable_monitoring && var.notification_topic_ocid != null ? oci_monitoring_alarm.gg_replicat_lag[0].id : null
+
+    # Event rules (from events.tf - mirrors DMS Console quickstart templates)
     event_rules = {
-      dms_migration  = var.enable_dms_event_notifications && var.notification_topic_ocid != null ? oci_events_rule.dms_migration_events[0].id : null
-      dms_connection = var.enable_dms_event_notifications && var.notification_topic_ocid != null ? oci_events_rule.dms_connection_events[0].id : null
-      gg_deployment  = var.enable_dms_event_notifications && var.notification_topic_ocid != null ? oci_events_rule.gg_deployment_events[0].id : null
+      job_status_changed = var.enable_dms_event_notifications && var.notification_topic_ocid != null ? oci_events_rule.dms_job_status_changed[0].id : null
+      job_succeeded      = var.enable_dms_event_notifications && var.notification_topic_ocid != null ? oci_events_rule.dms_job_succeeded[0].id : null
+      job_failed         = var.enable_dms_event_notifications && var.notification_topic_ocid != null ? oci_events_rule.dms_job_failed[0].id : null
+      job_waiting        = var.enable_dms_event_notifications && var.notification_topic_ocid != null ? oci_events_rule.dms_job_waiting[0].id : null
+      phase_completed    = var.enable_dms_event_notifications && var.notification_topic_ocid != null ? oci_events_rule.dms_phase_completed[0].id : null
     }
   }
 }
@@ -114,7 +124,7 @@ output "next_steps" {
 
     VALIDATION: ${var.auto_validate_migration ? "AUTO (check Console for results)" : "MANUAL required"}
     START: ${var.auto_start_migration ? "AUTO (after validation)" : "MANUAL required"}
-    NOTIFICATIONS: ${var.notification_topic_ocid != null ? "ENABLED" : "DISABLED (set notification_topic_ocid)"}
+    NOTIFICATIONS: ${var.notification_topic_ocid != null ? "ENABLED (5 event rules + 7 alarms)" : "DISABLED (set notification_topic_ocid)"}
 
     ================================================================
   EOT

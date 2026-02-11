@@ -1,6 +1,6 @@
 # Terraform - OCI Database Migration (DMS) + GoldenGate
 
-Infrastructure-as-code for migrating Oracle databases from AWS EC2 (or OCI Base DB) to OCI Autonomous Database using OCI Database Migration Service and GoldenGate.
+Infrastructure-as-code for migrating Oracle databases to OCI Autonomous Database using OCI Database Migration Service and GoldenGate.
 
 Supports multi-database, multi-schema migrations with enterprise monitoring, private networking, and automated execution.
 
@@ -66,7 +66,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed diagrams (Mermaid 
 ### Tools
 
 - Terraform >= 1.5.0
-- OCI CLI >= 3.50 (for auto-validate/start and pre-cutover scripts)
+- OCI CLI >= 3.50
 - Bash >= 4.4
 
 ### Pre-existing OCI Resources
