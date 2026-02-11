@@ -71,30 +71,41 @@ This Terraform package provisions and orchestrates a complete Oracle database mi
 6. **Pre-cutover validation** → run generated script
 7. **Switchover** → resume DMS to finalize
 
-## Data Flow
+## Migration and Cutover Flow
 
 ```
-Source Oracle DB (AWS/On-Prem)
+ (1) Terraform Apply
     │
-    ├── [DMS Connection: src-*] ──────── DMS Service
-    │       │                               │
-    │       │  ┌─ Data Pump Export ──────────┤
-    │       │  │                             │
-    │       │  └──→ Object Storage ──→ Data Pump Import
-    │       │                               │
-    │       └── GoldenGate Extract ─────────┤
-    │           (CDC / Real-time)            │
-    │                                       │
-    │                                       ▼
-    │                              Target ADB (OCI)
-    │                              [DMS Connection: tgt-*]
+    ▼
+(2) DMS Migration Created
     │
-    └── [GG Connection: ext_oracle] ── GoldenGate Deployment
-                                           │
-                                    [GG Connection: adb]
-                                           │
-                                    (Reverse Replication
-                                     if enabled)
+    ├─ Optional Auto-Validate
+    │     ├─ Success → Optional Auto-Start
+    │     └─ Failure → Event + Notification
+    │
+    ▼
+(3) Initial Load (Data Pump)
+    Source → Object Storage → Target ADB
+    │
+    ▼
+(4) Forward CDC (Online Replication)
+    Source ───────────────► Target
+    │
+    ▼
+(5) Pre-Cutover Validation
+    │
+    ▼
+(6) Optional Reverse Replication Activation
+    Target ───────────────► Source
+    (GoldenGate fallback path)
+    │
+    ▼
+(7) Cutover (Resume Migration)
+    │
+    ▼
+(8) Post-Cutover Monitoring
+
+
 ```
 ---
 ## Security Model
