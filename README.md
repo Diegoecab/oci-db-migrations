@@ -1,63 +1,75 @@
-# Terraform - OCI Database Migration (DMS) + GoldenGate
+# OCI Database Migration Terraform Package
 
-Infrastructure-as-code for migrating Oracle databases to OCI Autonomous Database using OCI Database Migration Service and GoldenGate.
-
-Supports multi-database, multi-schema migrations with enterprise monitoring, private networking, and automated execution.
+**Automated Oracle Database Migration from AWS (or On-Premises) to OCI Autonomous Database using Terraform, OCI Database Migration Service (DMS), and OCI GoldenGate.**
 
 ---
 
-## Features
+## Overview
 
-- **Multi-database, multi-schema**: Define N source databases and M target ADBs independently; migrations reference them by key with per-migration schema lists, no duplication
-- **Private networking**: GoldenGate deploys in a private subnet with NSG; DMS connections use private endpoints; ADB uses private endpoint
-- **GG reverse replication derived**: GG connections are derived from DMS source/target; only GG credentials needed
-- **GoldenGate license**: Defaults to BYOL
-- **Automated execution**: Auto-validate and auto-start per migration (configurable), pre-cutover validation scripts generated automatically
-- **Enterprise monitoring**: Two-tier alarms (WARNING + CRITICAL), OCI Events for lifecycle notifications, optional OCI Logging
-- **OCI provider >= 6.0**: Compatible with current provider (v6.x / v7.x), Terraform >= 1.5
-- **GitHub-ready**: Architecture diagrams (Mermaid), CI-friendly structure, .gitignore included
+This Terraform package provisions and orchestrates a complete Oracle database migration pipeline using OCI's fully managed services. Define your source databases, target ADBs, and schema lists in `terraform.tfvars` — Terraform handles everything else: networking, secrets, GoldenGate deployment, DMS connections, online replication, monitoring, and notifications.
+
+### What Gets Created
+
+1. **DMS Connections** — source Oracle DB + target ADB with private endpoints and replication credentials
+2. **OCI GoldenGate Deployment** — managed deployment with connections assigned for replication and fallback
+3. **Online Migrations** — Data Pump initial load via Object Storage + GoldenGate continuous replication (CDC)
+4. **Enterprise Monitoring** — two-tier alarms (WARNING + CRITICAL) for lag, CPU, and deployment health
+5. **Event Notifications** — OCI Events rules for DMS/GG lifecycle changes → ONS Topic → email/PagerDuty
+6. **Vault Secrets** — all credentials stored securely in OCI Vault
+7. **Auto-validate and auto-start** — migrations kick off automatically via OCI CLI provisioners
+8. **Pre-cutover validation scripts** — generated per migration for safe switchover
+
+### Key Benefits
+
+| Benefit | Detail |
+|---------|--------|
+| **Zero-cost DMS** | [OCI Database Migration Service is free](https://docs.oracle.com/en-us/iaas/database-migration/doc/overview-database-migration.html) |
+| **Fully managed** | No infrastructure to maintain — DMS and GoldenGate are OCI services |
+| **Minimal downtime** | Online migration keeps source available during the entire process |
+| **Fallback ready** | OCI GoldenGate provides reverse replication capability back to source |
+| **Repeatable** | Terraform IaC = identical deployments across environments |
+| **N:M migrations** | Multiple schemas, sources, and targets in a single configuration |
+| **Reduced operations** | No manual console clicks — configure variables, run `terraform apply` |
 
 ---
 
 ## Architecture
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed diagrams (Mermaid renders natively on GitHub).
-
-**Summary**: Source DBs on AWS connect via VPN/FastConnect to an OCI VCN. DMS and GoldenGate run in a private subnet with NSG protection. Target ADBs use private endpoints in the same subnet. All credentials are stored in OCI Vault. Monitoring alarms and event rules send notifications via ONS.
-
----
-
-## Project Structure
-
 ```
-.
-├── README.md
-├── QUICKSTART.md
-├── AUTHENTICATION_TROUBLESHOOTING.md
-├── .gitignore
-├── provider.tf                  # OCI provider >= 6.0, Terraform >= 1.5
-├── variables.tf                 # All variables with defaults
-├── terraform.tfvars.example     # Complete example configuration
-├── data.tf                      # Data sources and derived locals
-├── network.tf                   # NSG for migration traffic
-├── vault.tf                     # Vault secrets per source/target/GG
-├── dms.tf                       # DMS connections, migrations, auto-exec
-├── goldengate.tf                # GG deployment (private), derived connections
-├── events.tf                    # OCI Events rules for notifications
-├── monitoring.tf                # Two-tier alarms (WARNING + CRITICAL)
-├── logging.tf                   # OCI Logging for DMS/GG
-├── outputs.tf                   # Comprehensive outputs
-├── templates/
-│   ├── extract.prm.tpl          # GG Extract parameter template
-│   └── replicat.prm.tpl         # GG Replicat parameter template
-├── docs/
-│   └── ARCHITECTURE.md          # Mermaid diagrams (GitHub-native)
-├── scripts/
-│   └── dms-db-prep-v2.sh        # Oracle DB preparation (KB50125)
-├── gg-config/                   # Generated: param files, pre-cutover scripts
-├── migration-utility.sh         # Interactive deployment menu
-└── configure-dms-advanced.sh    # Post-deploy DMS settings helper
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                              OCI Tenancy                                     │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐  │
+│  │                        Private Subnet (VCN)                             │  │
+│  │                                                                         │  │
+│  │   ┌────────────┐      ┌──────────────┐      ┌────────────────────┐     │  │
+│  │   │  DMS        │      │  GoldenGate  │      │  Autonomous DB     │     │  │
+│  │   │  Service    │──────│  Deployment  │──────│  (Target)          │     │  │
+│  │   │  (Free)     │      │  (Managed)   │      │  Private Endpoint  │     │  │
+│  │   └──────┬──────┘      └──────┬───────┘      └────────────────────┘     │  │
+│  │          │      NSG (1521-1522, 443)                                    │  │
+│  └──────────┼──────────────────────┼───────────────────────────────────────┘  │
+│             │                      │                                          │
+│  ┌──────────┴──────────────────────┴───────────────────────────────────────┐  │
+│  │  OCI Vault │ OCI Events │ OCI Monitoring │ ONS Topic → Email/Slack     │  │
+│  └─────────────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────┬───────────────────────────────────────────────┘
+                               │ VPN / FastConnect / Peering
+                      ┌────────┴─────────┐
+                      │  Source Oracle DB │
+                      │  (AWS / On-Prem)  │
+                      └──────────────────┘
 ```
+
+### Migration Flow
+
+1. `terraform apply` → creates all OCI resources
+2. **DMS Validate** → checks connectivity and CPAT compatibility
+3. **DMS Start** → Data Pump export → Object Storage → import (Initial Load)
+4. **GoldenGate CDC** → continuous replication of changes
+5. **Monitor Replication Lag** → DMS pauses for confirmation
+6. **Pre-cutover validation** → run generated script
+7. **Switchover** → resume DMS to finalize
 
 ---
 
@@ -65,328 +77,154 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed diagrams (Mermaid 
 
 ### Tools
 
-- Terraform >= 1.5.0
-- OCI CLI >= 3.50
-- Bash >= 4.4
+- [Terraform](https://www.terraform.io/downloads) >= 1.5.0
+- [OCI CLI](https://docs.oracle.com/en-us/iaas/Content/API/SDKDocs/cliinstall.htm) (for auto-validate/start)
+- `jq` (for migration-utility.sh)
 
-### Pre-existing OCI Resources
+### OCI Resources (pre-existing)
 
-- VCN with a **private subnet** (no public IP assignment)
-- Service Gateway (for Oracle Services Network access)
-- NAT Gateway or DRG/VPN/FastConnect (for AWS connectivity)
-- Autonomous Database(s) with **private endpoint** enabled
+- VCN with private subnet and connectivity to source DB
 - OCI Vault with Master Encryption Key
-- Notification Topic (recommended)
-- Log Group (optional, for OCI Logging)
+- Object Storage Bucket for Data Pump staging
+- Autonomous Database (target) with private endpoint
+- ONS Notification Topic (optional, for alerts)
 
-### Database Preparation
-
-Run the official Oracle preparation script before deploying:
+### Source Database Preparation
 
 ```bash
-cd scripts && ./dms-db-prep-v2.sh
+./scripts/dms-db-prep-v2.sh
 ```
 
-Execute generated SQL on source and target databases.
-Reference: Oracle KB50125 (Feb 3, 2026).
+This configures GGADMIN, supplemental logging, archive log mode, and Data Pump directories.
+
+> **Reference**: [Preparing an Oracle Source Database](https://docs.oracle.com/en-us/iaas/database-migration/doc/preparing-oracle-source-database.html)
 
 ---
 
-## IAM Policies
+## Quick Start
 
-Minimum IAM policies required for the Terraform user/group. Replace `<compartment_name>` with your compartment.
+```bash
+# 1. Clone and configure
+git clone https://github.com/<your-org>/oci-database-migration-terraform.git
+cd oci-database-migration-terraform
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your OCIDs, credentials, and schema definitions
 
-### DMS Policies
+# 2. Deploy
+terraform init
+terraform plan
+terraform apply
 
-```
-Allow group MigrationAdmins to manage database-migration-family in compartment <compartment_name>
-Allow group MigrationAdmins to manage database-migration-connections in compartment <compartment_name>
-Allow group MigrationAdmins to read database-family in compartment <compartment_name>
-Allow group MigrationAdmins to read autonomous-database-family in compartment <compartment_name>
-```
+# 3. Monitor (OCI CLI)
+oci database-migration migration get \
+  --migration-id <MIGRATION_OCID> \
+  --query 'data.{state:"lifecycle-state",type:type}' --output table
 
-### GoldenGate Policies
-
-```
-Allow group MigrationAdmins to manage goldengate-family in compartment <compartment_name>
-Allow group MigrationAdmins to manage goldengate-deployment in compartment <compartment_name>
-Allow group MigrationAdmins to manage goldengate-connection in compartment <compartment_name>
-```
-
-### Network Policies
-
-```
-Allow group MigrationAdmins to manage virtual-network-family in compartment <compartment_name>
-Allow group MigrationAdmins to use subnets in compartment <compartment_name>
-Allow group MigrationAdmins to use network-security-groups in compartment <compartment_name>
-Allow group MigrationAdmins to use vnics in compartment <compartment_name>
-```
-
-### Vault Policies
-
-```
-Allow group MigrationAdmins to manage secret-family in compartment <compartment_name>
-Allow group MigrationAdmins to use vaults in compartment <compartment_name>
-Allow group MigrationAdmins to use keys in compartment <compartment_name>
-```
-
-### Monitoring and Events Policies
-
-```
-Allow group MigrationAdmins to manage alarms in compartment <compartment_name>
-Allow group MigrationAdmins to read metrics in compartment <compartment_name>
-Allow group MigrationAdmins to manage cloudevents-rules in compartment <compartment_name>
-Allow group MigrationAdmins to use ons-topics in compartment <compartment_name>
-```
-
-### Logging Policies (if enable_log_analytics = true)
-
-```
-Allow group MigrationAdmins to manage log-groups in compartment <compartment_name>
-Allow group MigrationAdmins to manage log-content in compartment <compartment_name>
-```
-
-### Object Storage Policies (if using staging bucket)
-
-```
-Allow group MigrationAdmins to manage objects in compartment <compartment_name>
-Allow group MigrationAdmins to manage buckets in compartment <compartment_name>
-```
-
-### Service Policies (required for DMS and GG to operate)
-
-```
-Allow service database-migration to manage virtual-network-family in compartment <compartment_name>
-Allow service database-migration to manage secret-family in compartment <compartment_name>
-Allow service database-migration to read autonomous-database-family in compartment <compartment_name>
-Allow service database-migration to manage objects in compartment <compartment_name>
-Allow service goldengate to use subnets in compartment <compartment_name>
-Allow service goldengate to use network-security-groups in compartment <compartment_name>
-Allow service goldengate to manage virtual-network-family in compartment <compartment_name>
+# 4. Switchover
+./gg-config/pre-cutover-<migration_key>.sh
+oci database-migration migration resume --migration-id <MIGRATION_OCID>
 ```
 
 ---
 
 ## Configuration
 
-### 1. Copy and edit
+### Include/Exclude Object Rules
 
-```bash
-cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars with your values
+| Format | Effect | DMS API |
+|--------|--------|---------|
+| `"HR.*"` | Entire schema | `owner=HR, object=.*, type=ALL` |
+| `"SALES.ORDERS"` | Specific table | `owner=SALES, object=ORDERS, type=TABLE` |
+
+> **Reference**: [Selecting Objects for Migration](https://docs.oracle.com/en-us/iaas/database-migration/doc/selecting-objects-oracle-migration.html)
+
+### File Structure
+
 ```
-
-### 2. Data model
-
-The configuration uses three interconnected maps:
-
-**source_databases**: Each unique source Oracle database defined once.
-
-```hcl
-source_databases = {
-  aws_prod = {
-    display_name = "AWS Oracle Prod"
-    host         = "10.0.1.100"
-    hostname     = "oracledb.example.com"  # FQDN for GG
-    service_name = "ORCL"
-    username     = "dms_admin"
-    password     = "..."
-    gg_username  = "GGADMIN"
-    gg_password  = "..."
-  }
-}
-```
-
-**target_databases**: Each unique Autonomous Database defined once.
-
-```hcl
-target_databases = {
-  adb_prod = {
-    display_name = "ADB Prod"
-    adb_ocid     = "ocid1.autonomousdatabase..."
-    password     = "..."
-    gg_username  = "GGADMIN"
-    gg_password  = "..."
-  }
-}
-```
-
-**migrations**: Each references a source and target by key.
-
-```hcl
-migrations = {
-  hr_migration = {
-    display_name       = "HR Schema"
-    migration_type     = "ONLINE"
-    source_db_key      = "aws_prod"
-    target_db_key      = "adb_prod"
-    schemas_to_migrate = ["HR"]
-    enable_reverse_replication = true
-  }
-  sales_migration = {
-    display_name       = "Sales + Inventory"
-    migration_type     = "ONLINE"
-    source_db_key      = "aws_prod"      # Same source, different schemas
-    target_db_key      = "adb_prod"
-    schemas_to_migrate = ["SALES", "INVENTORY"]
-    enable_reverse_replication = true
-  }
-}
-```
-
-This creates two migrations sharing one DMS source connection and one target connection, eliminating duplication.
-
-### 3. DMS execution control
-
-Global defaults with per-migration overrides:
-
-```hcl
-# Global defaults
-auto_validate_migration = true   # Auto-validate after creation
-auto_start_migration    = false  # Require manual start
-
-# Per-migration override (in migrations map)
-hr_migration = {
-  # ...
-  auto_validate = true
-  auto_start    = true  # Override: auto-start this specific migration
-}
+├── provider.tf              # Terraform + OCI provider
+├── variables.tf             # All input variables
+├── terraform.tfvars.example # Template configuration
+├── data.tf                  # Data sources + derived locals
+├── network.tf               # NSG with migration rules
+├── vault.tf                 # OCI Vault secrets
+├── goldengate.tf            # GG deployment + connections + assignments
+├── dms.tf                   # DMS connections + migrations + auto-start
+├── monitoring.tf            # Two-tier alarms
+├── events.tf                # OCI Events notifications
+├── logging.tf               # Optional OCI Logging
+├── outputs.tf               # Post-deploy summary
+├── import-state.sh          # State recovery script
+├── migration-utility.sh     # Interactive operations menu
+├── scripts/dms-db-prep-v2.sh
+├── templates/               # GG Extract/Replicat templates
+└── docs/
+    ├── ARCHITECTURE.md
+    └── OCI_CLI_REFERENCE.md
 ```
 
 ---
 
-## Deployment
+## GoldenGate Fallback Strategy
 
-### Interactive
+This package deploys OCI GoldenGate alongside DMS to provide a **fallback path**:
 
-```bash
-chmod +x migration-utility.sh configure-dms-advanced.sh
-./migration-utility.sh
-```
+1. **DMS manages forward migration** (Source → Target) using GoldenGate internally
+2. **Standalone GoldenGate deployment** is provisioned with connections to both databases
+3. If rollback is needed, configure **reverse replication** (Target → Source) via the GG console
 
-### Manual
-
-```bash
-terraform init
-terraform plan
-terraform apply
-```
-
-### Post-apply
-
-1. If `auto_validate_migration = true`, validation runs automatically. Check Console for results.
-2. Configure advanced DMS settings in Console (Data Pump parallelism, compression).
-3. Start migrations (manual or auto).
-4. Monitor via alarms and event notifications.
-
----
-
-## Operations
-
-### Pre-cutover validation
-
-Auto-generated scripts verify migration health before switchover:
+Set `enable_reverse_replication = true` per migration. Access GoldenGate:
 
 ```bash
-./gg-config/pre-cutover-hr_migration.sh
-```
-
-Checks migration state, replication lag, and connection health.
-
-### Manual commands
-
-```bash
-# Validate
-oci database-migration migration validate \
-  --migration-id $(terraform output -json dms_migrations | jq -r '.hr_migration.id')
-
-# Start
-oci database-migration migration start \
-  --migration-id $(terraform output -json dms_migrations | jq -r '.hr_migration.id')
-
-# GoldenGate console
 terraform output -json gg_deployment | jq -r '.deployment_url'
+# Login: oggadmin / <goldengate_admin_password>
 ```
+
+> **Reference**: [OCI GoldenGate](https://docs.oracle.com/en-us/iaas/goldengate/doc/overview-goldengate.html)
 
 ---
 
 ## Monitoring
 
-### Alarms (metric-based, two tiers)
+| Alarm | Severity | Default Threshold |
+|-------|----------|-------------------|
+| DMS Replication Lag | WARNING | > 60s |
+| DMS Replication Lag | CRITICAL | > 300s |
+| GoldenGate Health | CRITICAL | Deployment unhealthy |
+| GoldenGate Extract/Replicat Lag | WARNING / CRITICAL | Configurable |
+| GoldenGate CPU | WARNING / CRITICAL | > 80% / > 95% |
 
-| Alarm | WARNING | CRITICAL |
-|-------|---------|----------|
-| DMS Lag (per migration) | > 60s | > 300s |
-| GG Extract Lag | > 60s | > 300s |
-| GG Replicat Lag | > 60s | > 300s |
-| GG CPU | > 80% | > 95% |
-| GG Deployment Health | - | < 1 |
+Events route through the ONS Topic. Add email subscribers:
 
-Thresholds configurable via `lag_threshold_seconds` and `lag_critical_threshold_seconds`.
-
-### Events (lifecycle-based)
-
-Captures DMS migration and connection state changes, GG deployment updates.
-Notifications sent to ONS topic (email, Slack, PagerDuty, HTTPS webhook).
-
-### Logging (optional)
-
-OCI Logging for DMS and GoldenGate operational/audit logs.
-Enable with `enable_log_analytics = true` and provide `log_group_ocid`.
+```bash
+oci ons subscription create \
+  --compartment-id <COMPARTMENT_OCID> \
+  --topic-id <TOPIC_OCID> \
+  --protocol EMAIL \
+  --subscription-endpoint your-email@company.com
+```
 
 ---
 
 ## Troubleshooting
 
-### Connection failed
-
-Verify NSG allows port 1521 from the private subnet. Test connectivity:
-
-```bash
-nc -zv <host> 1521
-```
-
-### GoldenGate FQDN error
-
-GG requires a hostname, not IP. Add DNS or `/etc/hosts`:
-
-```
-10.0.1.100  oracledb.example.com
-```
-
-### ADB private endpoint not reachable
-
-Ensure ADB is configured with private endpoint in the same VCN/subnet. Verify Service Gateway exists for Oracle Services Network.
-
-### Auto-validation failed
-
-Check OCI Console for validation details. Common causes: missing database privileges, network connectivity, incorrect credentials.
-
-### High lag
-
-Scale GoldenGate OCPUs, increase Data Pump parallelism, or reduce source database load.
+| Issue | Solution |
+|-------|----------|
+| `409-Conflict` on create | State lost — run `import-state.sh` |
+| `FQDN cannot be IP` | Use valid hostname in `hostname` field |
+| `objectName must not be null` | Use `"SCHEMA.*"` format |
+| `objectType SCHEMA not valid` | Use `type=ALL` (automatic with `.*` pattern) |
+| `LimitExceeded` | Request limit increase or delete unused migrations |
+| Replication "Disabled" | `ggs_details` block required for ONLINE migrations |
+| OCI Provider v8 errors | Pin to `~> 7.0` in provider.tf |
 
 ---
 
-## Cleanup
+## Official Oracle References
 
-```bash
-terraform destroy
-```
-
----
-
-## References
-
-- [Oracle KB50125: Database Preparation Utility](https://support.oracle.com) (Feb 3, 2026)
-- [OCI DMS Documentation](https://docs.oracle.com/en-us/iaas/database-migration/)
-- [OCI GoldenGate Documentation](https://docs.oracle.com/en-us/iaas/goldengate/)
-- [OCI Events Service](https://docs.oracle.com/en-us/iaas/Content/Events/Concepts/eventsoverview.htm)
-- [OCI Monitoring](https://docs.oracle.com/en-us/iaas/Content/Monitoring/Concepts/monitoringoverview.htm)
-- [Terraform OCI Provider](https://registry.terraform.io/providers/oracle/oci/latest/docs)
-
----
-
-## License
-
-See individual file headers. Oracle DB prep script: Universal Permissive License v 1.0.
+- [OCI Database Migration Service](https://docs.oracle.com/en-us/iaas/database-migration/doc/overview-database-migration.html)
+- [Creating Oracle Migrations](https://docs.oracle.com/en-us/iaas/database-migration/doc/creating-migrations.html)
+- [Selecting Objects for Migration](https://docs.oracle.com/en-us/iaas/database-migration/doc/selecting-objects-oracle-migration.html)
+- [DMS Known Issues](https://docs.oracle.com/en/cloud/paas/database-migration/known-issues/index.html)
+- [OCI GoldenGate](https://docs.oracle.com/en-us/iaas/goldengate/doc/overview-goldengate.html)
+- [Terraform OCI Provider - DMS](https://registry.terraform.io/providers/oracle/oci/latest/docs/resources/database_migration_migration)
+- [Terraform OCI Provider - GoldenGate](https://registry.terraform.io/providers/oracle/oci/latest/docs/resources/golden_gate_deployment)
