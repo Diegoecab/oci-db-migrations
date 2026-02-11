@@ -132,14 +132,14 @@ This Terraform package provisions and orchestrates a complete Oracle database mi
 - Autonomous Database (target) with private endpoint
 - ONS Notification Topic (optional, for alerts)
 
-### Source Database Preparation
+### Source and target Database Preparation
 
 ```bash
 ./scripts/dms-db-prep-v2.sh
 ```
 
 This configures GGADMIN, supplemental logging, archive log mode, and Data Pump directories.
-
+You can download the prep script from [Download & Use Database Preparation Utility to Prepare Your Databases for Migration ](https://support.oracle.com/support/?anchorId=&kmContentId=2953866&page=sptemplate&sptemplate=km-article)
 > **Reference**: [Preparing an Oracle Source Database](https://docs.oracle.com/en-us/iaas/database-migration/doc/preparing-oracle-source-database.html)
 
 ---
