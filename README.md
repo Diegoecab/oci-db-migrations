@@ -71,7 +71,39 @@ This Terraform package provisions and orchestrates a complete Oracle database mi
 6. **Pre-cutover validation** → run generated script
 7. **Switchover** → resume DMS to finalize
 
+## Data Flow
+
+```
+Source Oracle DB (AWS/On-Prem)
+    │
+    ├── [DMS Connection: src-*] ──────── DMS Service
+    │       │                               │
+    │       │  ┌─ Data Pump Export ──────────┤
+    │       │  │                             │
+    │       │  └──→ Object Storage ──→ Data Pump Import
+    │       │                               │
+    │       └── GoldenGate Extract ─────────┤
+    │           (CDC / Real-time)            │
+    │                                       │
+    │                                       ▼
+    │                              Target ADB (OCI)
+    │                              [DMS Connection: tgt-*]
+    │
+    └── [GG Connection: ext_oracle] ── GoldenGate Deployment
+                                           │
+                                    [GG Connection: adb]
+                                           │
+                                    (Reverse Replication
+                                     if enabled)
+```
 ---
+## Security Model
+
+- All database credentials stored in **OCI Vault** as Base64-encoded secrets
+- DMS connections use **private endpoints** within the VCN (no public IP)
+- GoldenGate deployment runs in **private subnet** with NSG
+- NSG rules restrict traffic to Oracle DB ports (1521-1522) and HTTPS (443) from within VCN
+- Terraform state contains sensitive data — use remote backend with encryption
 
 ## Prerequisites
 
