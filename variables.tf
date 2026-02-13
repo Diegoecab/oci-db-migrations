@@ -419,6 +419,68 @@ variable "log_group_ocid" {
   default     = null
 }
 
+variable "gg_exclude_users" {
+  description = <<-EOT
+    List of database users to TRANLOGOPTIONS EXCLUDEUSER in fallback Extract.
+    Prevents replication loops when running fallback Extract in parallel
+    with DMS forward replication. DMS applies changes as GGADMIN on target,
+    so excluding GGADMIN prevents the fallback Extract from capturing
+    those DMS-applied changes and sending them back to source.
+    Set to [] to disable EXCLUDEUSER (not recommended during parallel run).
+  EOT
+  type    = list(string)
+  default = ["GGADMIN"]
+}
+
+variable "gg_auto_start_processes" {
+  description = <<-EOT
+    Start Extract/Replicat immediately after creation.
+    
+    false (default, RECOMMENDED): Creates processes in STOPPED state.
+      Post-cutover, run gg_activate_fallback.sh to re-position SCN
+      to current time and start both processes. This avoids accumulating
+      stale redo logs between Terraform apply and actual cutover.
+    
+    true: Start immediately (for testing or when cutover is imminent).
+  EOT
+  type    = bool
+  default = false
+}
+
+variable "gg_checkpoint_table" {
+  description = <<-EOT
+    Checkpoint table for Replicat recovery tracking.
+    Uses GGADMIN schema to avoid polluting business/app schemas.
+    Auto-created on source DB via REST API before Replicat creation.
+  EOT
+  type    = string
+  default = "GGADMIN.GG_CHECKPOINT"
+}
+
+variable "gg_auto_create_checkpoint" {
+  description = <<-EOT
+    Automatically create the checkpoint table on source DB before Replicat.
+    Requires Python 3.8+ (installed via miniconda if needed) and network
+    access from Terraform host to source DB.
+    If false, you must create the table manually via AdminClient:
+      DBLOGIN USERIDALIAS <alias> DOMAIN OracleGoldenGate
+      ADD CHECKPOINTTABLE GGADMIN.GG_CHECKPOINT
+  EOT
+  type    = bool
+  default = true
+}
+
+variable "oracle_home" {
+  description = <<-EOT
+    Path to ORACLE_HOME on the Terraform host (for oracledb thick mode).
+    Required only if the source DB uses Native Network Encryption (NNE).
+    Example: "/u01/app/oracle/product/19c/dbhome_1"
+    Leave empty to use thin mode (no Oracle Client needed).
+  EOT
+  type    = string
+  default = ""
+}
+
 # ----------------------------------------------------------------------------
 # Tags
 # ----------------------------------------------------------------------------

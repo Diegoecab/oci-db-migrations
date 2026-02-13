@@ -29,6 +29,10 @@ resource "oci_vault_secret" "target_db_password" {
     content_type = "BASE64"
     content      = base64encode(each.value.password)
   }
+   lifecycle {
+    ignore_changes = [secret_content]
+    # If secret already exists, import it instead of recreating
+  }
   freeform_tags = merge(var.freeform_tags, { "Database" = each.key, "Role" = "Target" })
 }
 
@@ -42,6 +46,10 @@ resource "oci_vault_secret" "gg_admin_password" {
   secret_content {
     content_type = "BASE64"
     content      = base64encode(var.goldengate_admin_password)
+  }
+   lifecycle {
+    ignore_changes = [secret_content]
+    # If secret already exists, import it instead of recreating
   }
   freeform_tags = merge(var.freeform_tags, { "Role" = "GoldenGateAdmin" })
 }
@@ -60,6 +68,10 @@ resource "oci_vault_secret" "gg_adb_password" {
     content_type = "BASE64"
     content      = base64encode(each.value.gg_password)
   }
+   lifecycle {
+    ignore_changes = [secret_content]
+    # If secret already exists, import it instead of recreating
+  }
   freeform_tags = merge(var.freeform_tags, { "Database" = each.key, "Role" = "GoldenGateADB" })
 }
 
@@ -76,6 +88,10 @@ resource "oci_vault_secret" "gg_source_password" {
   secret_content {
     content_type = "BASE64"
     content      = base64encode(each.value.gg_password)
+  }
+   lifecycle {
+    ignore_changes = [secret_content]
+    # If secret already exists, import it instead of recreating
   }
   freeform_tags = merge(var.freeform_tags, { "Database" = each.key, "Role" = "GoldenGateExtOracle" })
 }
