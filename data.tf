@@ -67,4 +67,7 @@ locals {
   # Per-migration auto-start (migration-level override or global default)
   auto_start = { for k, m in var.migrations : k => coalesce(try(m.auto_start, null), var.auto_start_migration) }
 
+  # Per-migration auto-start fallback GG processes (migration-level override or global default)
+  auto_start_fallback = { for k, m in var.migrations : k => coalesce(try(m.auto_start_fallback, null), var.auto_start_fallback_replication) }
+
 }

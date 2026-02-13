@@ -263,7 +263,7 @@ $(printf "%b" "$TABLE_LINES")
   ],
   "source": { "tranlogs": "integrated" },
   "begin": "now",
-  "status": "stopped"
+  "status": "${local.auto_start_fallback[each.key] ? "running" : "stopped"}"
 }
 EJSON
 )
@@ -402,7 +402,7 @@ $(printf "%b" "$MAP_LINES")
   "checkpoint": { "table": "$CHECKPOINT_TABLE" },
   "mode": { "type": "nonintegrated", "parallel": false },
   "begin": "now",
-  "status": "stopped"
+  "status": "${local.auto_start_fallback[each.key] ? "running" : "stopped"}"
 }
 RJSON
 )

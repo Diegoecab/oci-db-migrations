@@ -90,11 +90,16 @@ flowchart TD
     E -- No --> N[Event + Notification]
     F -- Yes --> G[3. Start Migration]
     F -- No --> G
-    G --> H[4. Initial Load - Data Pump\nSource → Object Storage → Target ADB]
+    G --> GG{auto_start_fallback?}
+    GG -- Yes --> GG_RUN[GG Reverse Replication created\nand started immediately\nTarget → Source]
+    GG -- No --> GG_STOP[GG Reverse Replication created\nin stopped state]
+    GG_RUN --> H
+    GG_STOP --> H
+    H[4. Initial Load - Data Pump\nSource → Object Storage → Target ADB]
     H --> I[5. Forward CDC - Online Replication\nSource → Target]
     I --> J[6. Pre-Cutover Validation]
-    J --> K{Fallback\nEnabled?}
-    K -- Yes --> L[Activate GG Reverse Replication\nTarget → Source]
+    J --> K{Fallback\nEnabled &\nNot Running?}
+    K -- Yes --> L[Activate GG Reverse Replication\nmanually before cutover]
     K -- No --> M
     L --> M[7. Cutover - Resume Migration]
     M --> O[8. Post-Cutover Monitoring]
@@ -121,26 +126,15 @@ This package provisions a **standalone OCI GoldenGate deployment** alongside the
 2. **Creates Extract and Replicat processes** via the GoldenGate REST API, pre-configured with the correct schema mappings derived from the migration's object lists
 3. **Generates parameter files** (`gg-config/extract-*.prm`, `gg-config/replicat-*.prm`) with TABLE/MAP rules matching the migrated schemas
 
-These processes are created in a **stopped state**. They do not consume replication resources or impact the forward migration. They serve as a **pre-staged safety net** — ready to be activated at any point before or after cutover.
+By default, these processes are created in a **stopped state** — ready to be activated manually at any point before or after cutover. If `auto_start_fallback = true`, the processes are created and **started immediately**, so reverse replication is already running before cutover begins.
 
 ### When to Activate Fallback
 
-The recommended workflow integrates fallback activation into the cutover process:
+There are two approaches depending on your configuration:
 
-```
-Pre-Cutover Validation ──► Activate Fallback (GG) ──► Cutover (Resume DMS)
-                                    │
-                                    ▼
-                           GoldenGate begins replicating
-                           Target ADB → Source DB
-                                    │
-                                    ▼
-                           If issues detected post-cutover:
-                           redirect applications back to source
-                           with minimal data loss
-```
+**Option A — Auto-start (`auto_start_fallback = true`)**: GoldenGate Extract and Replicat processes start automatically after creation. Reverse replication (Target → Source) is already running when you reach the cutover step. No manual activation needed.
 
-Activate fallback processes through the interactive utility or the GoldenGate console:
+**Option B — Manual activation (`auto_start_fallback = false`, default)**: Processes are created in stopped state. Activate them manually before cutover:
 
 ```bash
 # Via migration-utility.sh (Option 11)
@@ -152,9 +146,12 @@ Activate fallback processes through the interactive utility or the GoldenGate co
 
 ### Fallback Configuration
 
-Enable fallback per migration with a single flag:
+Enable fallback per migration and control when processes start:
 
 ```hcl
+# Global default: GG fallback processes created in stopped state
+auto_start_fallback_replication = false
+
 migrations = {
   hr_migration = {
     display_name              = "HR Schema Migration"
@@ -163,6 +160,7 @@ migrations = {
     target_db_key             = "adb_prod"
     include_allow_objects      = ["HR.*"]
     enable_reverse_replication = true   # ← enables the fallback path
+    auto_start_fallback        = true   # ← override: start GG processes immediately
   }
 }
 ```
