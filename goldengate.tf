@@ -288,8 +288,7 @@ $(printf "%b" "$TABLE_LINES")
   "credentials": { "alias": "$ADB_ALIAS" },
   "registration": { "optimized": false },
   "begin": "now",
-  "targets": [{ "name": "$TRAIL_NAME" }],
-  "status": "${var.gg_auto_start_processes ? "running" : "stopped"}"
+  "status": "${local.auto_start_gg[each.key] ? "running" : "stopped"}"
 }
 EJSON
 )
@@ -548,7 +547,7 @@ $(printf "%b" "$MAP_LINES")
   "mode": { "type": "nonintegrated", "parallel": false },
   "registration": "none",
   "begin": "now",
-  "status": "${var.gg_auto_start_processes ? "running" : "stopped"}"
+  "status": "${local.auto_start_gg[each.key] ? "running" : "stopped"}"
 }
 RJSON
 )

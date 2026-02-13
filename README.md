@@ -8,6 +8,8 @@
 
 This Terraform package provisions and orchestrates a complete Oracle database migration pipeline using OCI's fully managed services. Define your source databases, target ADBs, and schema lists in `terraform.tfvars` — Terraform handles everything else: networking, secrets, GoldenGate deployment, DMS connections, online replication, monitoring, and notifications.
 
+> **Built-in Migration Fallback**: Every online migration can be deployed with an automatic reverse replication path powered by OCI GoldenGate. If issues arise after cutover, activate the pre-configured GoldenGate Extract and Replicat processes to replicate data back from the target ADB to the source database — providing a proven rollback strategy without manual setup or additional infrastructure.
+
 ### What Gets Created
 
 1. **DMS Connections** — source Oracle DB + target ADB with private endpoints and replication credentials
@@ -29,7 +31,7 @@ This Terraform package provisions and orchestrates a complete Oracle database mi
 | **Zero-cost DMS** | [OCI Database Migration Service is free](https://docs.oracle.com/en-us/iaas/database-migration/doc/overview-database-migration.html) |
 | **Fully managed** | No infrastructure to maintain — DMS and GoldenGate are OCI services |
 | **Minimal downtime** | Online migration keeps source available during the entire process |
-| **Fallback ready** | OCI GoldenGate provides reverse replication capability back to source |
+| **Fallback ready** | OCI GoldenGate reverse replication provides a proven rollback path — replicate data back from target to source if issues arise post-cutover |
 | **Repeatable** | Terraform IaC = identical deployments across environments |
 | **N:M migrations** | Multiple schemas, sources, and targets in a single configuration |
 | **Reduced operations** | No manual console clicks — configure variables, run `terraform apply` |
@@ -77,40 +79,94 @@ This Terraform package provisions and orchestrates a complete Oracle database mi
 
 ## Migration and Cutover Flow
 
+```mermaid
+flowchart TD
+    A([1. Terraform Apply]) --> B[2. DMS Migration Created]
+    B --> C{Auto-Validate?}
+    C -- Yes --> D[Validate Migration]
+    C -- No --> G
+    D --> E{Success?}
+    E -- Yes --> F{Auto-Start?}
+    E -- No --> N[Event + Notification]
+    F -- Yes --> G[3. Start Migration]
+    F -- No --> G
+    G --> GG{gg_auto_start\n_processes?}
+    GG -- Yes --> GG_RUN[GG Reverse Replication created\nand started immediately\nTarget → Source]
+    GG -- No --> GG_STOP[GG Reverse Replication created\nin stopped state]
+    GG_RUN --> H
+    GG_STOP --> H
+    H[4. Initial Load - Data Pump\nSource → Object Storage → Target ADB]
+    H --> I[5. Forward CDC - Online Replication\nSource → Target]
+    I --> J[6. Pre-Cutover Validation]
+    J --> K{Fallback\nEnabled &\nNot Running?}
+    K -- Yes --> L[Activate GG Reverse Replication\nmanually before cutover]
+    K -- No --> M
+    L --> M[7. Cutover - Resume Migration]
+    M --> O[8. Post-Cutover Monitoring]
+    O --> P{Rollback\nNeeded?}
+    P -- Yes --> Q[Start GG Fallback Processes\nTarget ADB → Source DB]
+    P -- No --> R([Migration Complete])
 ```
- (1) Terraform Apply
-    │
-    ▼
-(2) DMS Migration Created
-    │
-    ├─ Optional Auto-Validate
-    │     ├─ Success → Optional Auto-Start
-    │     └─ Failure → Event + Notification
-    │
-    ▼
-(3) Initial Load (Data Pump)
-    Source → Object Storage → Target ADB
-    │
-    ▼
-(4) Forward CDC (Online Replication)
-    Source ───────────────► Target
-    │
-    ▼
-(5) Pre-Cutover Validation
-    │
-    ▼
-(6) Optional Reverse Replication Activation
-    Target ───────────────► Source
-    (GoldenGate fallback path)
-    │
-    ▼
-(7) Cutover (Resume Migration)
-    │
-    ▼
-(8) Post-Cutover Monitoring
 
+---
 
+## Migration Fallback Strategy
+
+One of the most critical concerns in any database migration is **what happens if something goes wrong after cutover**. This package addresses that concern directly by integrating OCI GoldenGate as a **migration fallback mechanism**.
+
+### Why Fallback Matters
+
+Database migrations are inherently high-risk operations. Applications may behave unexpectedly against the new target, performance characteristics may differ, or data integrity issues may surface only under production load. Without a fallback strategy, the only option is to restore from backups — a process that is slow, error-prone, and results in data loss for any transactions that occurred after cutover.
+
+### How It Works
+
+This package provisions a **standalone OCI GoldenGate deployment** alongside the DMS migration pipeline. For any migration with `enable_reverse_replication = true`, Terraform automatically:
+
+1. **Registers both databases** with the GoldenGate deployment (source as `EXT_<key>`, target as `ADB_<key>`)
+2. **Creates Extract and Replicat processes** via the GoldenGate REST API, pre-configured with the correct schema mappings derived from the migration's object lists
+3. **Generates parameter files** (`gg-config/extract-*.prm`, `gg-config/replicat-*.prm`) with TABLE/MAP rules matching the migrated schemas
+
+By default, these processes are created in a **stopped state** — ready to be activated manually at any point before or after cutover. If `gg_auto_start_processes = true` (or per-migration `auto_start_gg_processes = true`), the processes are created and **started immediately**, so reverse replication is already running before cutover begins.
+
+### When to Activate Fallback
+
+There are two approaches depending on your configuration:
+
+**Option A — Auto-start (`gg_auto_start_processes = true`)**: GoldenGate Extract and Replicat processes start automatically after creation. Reverse replication (Target → Source) is already running when you reach the cutover step. No manual activation needed.
+
+**Option B — Manual activation (`gg_auto_start_processes = false`, default, RECOMMENDED)**: Processes are created in stopped state. Post-cutover, run `gg_activate_fallback.sh` to re-position SCN to current time and start both processes. This avoids accumulating stale redo logs between Terraform apply and actual cutover. Alternatively, activate manually before cutover:
+
+```bash
+# Via migration-utility.sh (Option 11)
+./migration-utility.sh
+
+# Or directly via GoldenGate REST API
+# The utility handles authentication and process startup automatically
 ```
+
+### Fallback Configuration
+
+Enable fallback per migration and control when processes start:
+
+```hcl
+# Global default: GG fallback processes created in stopped state (RECOMMENDED)
+gg_auto_start_processes = false
+
+migrations = {
+  hr_migration = {
+    display_name              = "HR Schema Migration"
+    migration_type            = "ONLINE"
+    source_db_key             = "aws_oracle_prod"
+    target_db_key             = "adb_prod"
+    include_allow_objects      = ["HR.*"]
+    enable_reverse_replication = true   # ← enables the fallback path
+    auto_start_gg_processes    = true   # ← override: start GG processes immediately
+  }
+}
+```
+
+> **Note**: Fallback requires an ONLINE migration type. The GoldenGate deployment is shared across all migrations — only one deployment is provisioned regardless of how many migrations have fallback enabled.
+
 ---
 
 ## Security Model
@@ -156,8 +212,8 @@ You can download the prep script from [Download & Use Database Preparation Utili
 
 ```bash
 # 1. Clone and configure
-git clone https://github.com/<your-org>/oci-database-migration-terraform.git
-cd oci-database-migration-terraform
+git clone https://github.com/Diegoecab/oci-db-migrations.git
+cd oci-db-migrations
 cp terraform.tfvars.example terraform.tfvars
 # Edit terraform.tfvars with your OCIDs, credentials, and schema definitions
 

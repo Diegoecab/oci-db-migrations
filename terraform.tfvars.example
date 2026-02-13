@@ -141,11 +141,10 @@ migrations = {
     source_cdb_key       = "awsoracleprodcdb"   # Key from source_container_databases
     target_db_key        = "adbprod"            # Key from target_databases
 
-    include_allow_objects = [
-      "TESTUSER.*"                              # All objects in TESTUSER schema
-    ]
-
-    enable_reverse_replication = true            # DMS-managed reverse replication
+    enable_reverse_replication = true
+    # auto_start_gg_processes = true  # Override global: start GG processes immediately (running state)
+    # auto_validate = true   # Override global default per migration
+    # auto_start    = false
   }
 
   # --- Example 2: Specific tables migration ---
@@ -229,39 +228,10 @@ replicat_config = {
 gg_schemas_to_replicate = ["TESTUSER"]
 gg_exclude_tables       = ["*.TMP_%", "*.TEMP_%", "*.LOG_%"]
 
-# --- Loop Prevention ---
-# EXCLUDEUSER prevents the fallback Extract from capturing changes made by
-# GGADMIN in ADB (which are DMS forward replication writes). This breaks
-# the echo-back loop when both DMS and fallback are configured.
-gg_exclude_users = ["GGADMIN"]
-
-# --- Process Startup Behavior ---
-# false (RECOMMENDED for production):
-#   Creates Extract/Replicat in STOPPED state. Post-cutover, run
-#   scripts/gg_activate_fallback.sh to re-position SCN to current
-#   time and start both processes. This avoids accumulating stale
-#   redo logs between Terraform apply and actual cutover.
-#
-# true (for testing / when cutover is imminent):
-#   Starts processes immediately on creation. Extract begins capturing
-#   from the SCN at creation time.
-gg_auto_start_processes = false
-
-# Increment to force recreation of GG processes on next apply.
-# Example: change to "run-2" after modifying extract/replicat config.
-gg_process_rerun_token = "run-1"
-
-# --- Checkpoint Table ---
-# Replicat checkpoint table on the on-premises (target) database.
-# Created automatically if gg_auto_create_checkpoint = true.
-gg_auto_create_checkpoint = true
-gg_checkpoint_table       = "GGADMIN.GG_CHECKPOINT"
-oracle_home               = "/usr/lib/oracle/23/client64"  # Required for checkpoint script (NNE)
-
-
-# ╔════════════════════════════════════════════════════════════════════════════╗
-# ║ PRE-CUTOVER VALIDATION                                                   ║
-# ╚════════════════════════════════════════════════════════════════════════════╝
+# --- DMS Execution Control ---
+auto_validate_migration         = true
+auto_start_migration            = false
+gg_auto_start_processes         = false  # When true, GG Extract/Replicat start immediately after creation
 
 pre_cutover_validation_enabled = true
 pre_cutover_max_lag_seconds    = 30
