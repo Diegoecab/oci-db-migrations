@@ -90,7 +90,7 @@ flowchart TD
     E -- No --> N[Event + Notification]
     F -- Yes --> G[3. Start Migration]
     F -- No --> G
-    G --> GG{gg_auto_start\n_processes?}
+    G --> GG{gg_auto_start_processes?}
     GG -- Yes --> GG_RUN[GG Reverse Replication created\nand started immediately\nTarget → Source]
     GG -- No --> GG_STOP[GG Reverse Replication created\nin stopped state]
     GG_RUN --> H
@@ -98,10 +98,10 @@ flowchart TD
     H[4. Initial Load - Data Pump\nSource → Object Storage → Target ADB]
     H --> I[5. Forward CDC - Online Replication\nSource → Target]
     I --> J[6. Pre-Cutover Validation]
-    J --> K{Fallback\nEnabled &\nNot Running?}
-    K -- Yes --> L[Activate GG Reverse Replication\nmanually before cutover]
+    J --> K{GG processes\nstopped?}
+    K -- Yes --> L[Activate GG Reverse Replication\nbefore app writes to new DB]
     K -- No --> M
-    L --> M[7. Cutover - Resume Migration]
+    L --> M[7. Cutover - Resume Migration\nApp starts writing to Target]
     M --> O[8. Post-Cutover Monitoring]
     O --> P{Rollback\nNeeded?}
     P -- Yes --> Q[Start GG Fallback Processes\nTarget ADB → Source DB]
@@ -134,7 +134,7 @@ There are two approaches depending on your configuration:
 
 **Option A — Auto-start (`gg_auto_start_processes = true`)**: GoldenGate Extract and Replicat processes start automatically after creation. Reverse replication (Target → Source) is already running when you reach the cutover step. No manual activation needed.
 
-**Option B — Manual activation (`gg_auto_start_processes = false`, default, RECOMMENDED)**: Processes are created in stopped state. Post-cutover, run `gg_activate_fallback.sh` to re-position SCN to current time and start both processes. This avoids accumulating stale redo logs between Terraform apply and actual cutover. Alternatively, activate manually before cutover:
+**Option B — Manual activation (`gg_auto_start_processes = false`, default, RECOMMENDED)**: Processes are created in stopped state. Activate them **just before cutover** — i.e., before the application starts writing to the new target DB. Run `gg_activate_fallback.sh` to re-position SCN to the current time and start both processes. This avoids accumulating stale redo logs between Terraform apply and actual cutover:
 
 ```bash
 # Via migration-utility.sh (Option 11)
