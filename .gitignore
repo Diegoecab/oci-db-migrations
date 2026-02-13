@@ -16,3 +16,7 @@ terraform.tfvars
 Thumbs.db
 .vscode/
 .idea/
+
+# Generated GoldenGate parameter files
+gg-config/*.prm
+gg-config/pre-cutover-*.sh

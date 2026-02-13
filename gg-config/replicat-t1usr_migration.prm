@@ -1,5 +1,0 @@
--- Auto-generated fallback Replicat
-REPLICAT RPD6777E
-USERIDALIAS awsoracleprod
-DISCARDFILE RPD6777E_discard.txt, PURGE
-MAP TESTUSER.*, TARGET TESTUSER.*;
