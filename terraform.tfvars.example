@@ -91,7 +91,7 @@ migrations = {
     exclude_objects    = ["HR.TMP_%", "HR.BACKUP_%"]
 
     enable_reverse_replication = true
-    # auto_start_fallback = true  # Override global: auto-start GG fallback processes (running state)
+    # auto_start_gg_processes = true  # Override global: start GG processes immediately (running state)
     # auto_validate = true   # Override global default per migration
     # auto_start    = false
   }
@@ -147,7 +147,7 @@ gg_exclude_tables       = ["*.TMP_%", "*.TEMP_%", "*.LOG_%"]
 # --- DMS Execution Control ---
 auto_validate_migration         = true
 auto_start_migration            = false
-auto_start_fallback_replication = false  # When true, GG Extract/Replicat start immediately after creation
+gg_auto_start_processes         = false  # When true, GG Extract/Replicat start immediately after creation
 
 # --- Pre-Cutover Validation ---
 pre_cutover_validation_enabled = true

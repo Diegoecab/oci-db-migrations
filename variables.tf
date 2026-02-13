@@ -171,7 +171,7 @@ variable "migrations" {
     migration_mode = optional(string) # "ONLINE"/"OFFLINE"
 
     enable_reverse_replication = optional(bool, false)
-    auto_start_fallback        = optional(bool) # si no viene, cae al default global auto_start_fallback_replication
+    auto_start_gg_processes    = optional(bool) # si no viene, cae al default global gg_auto_start_processes
     auto_validate              = optional(bool) # si no viene, cae al default global
     auto_start                 = optional(bool) # si no viene, cae al default global
   }))
@@ -344,10 +344,19 @@ variable "force_rerun_validate_start" {
   default     = "1"
 }
 
-variable "auto_start_fallback_replication" {
-  description = "Auto-start GoldenGate reverse replication (Extract/Replicat) processes after creation. When false, processes are created in stopped state and must be activated manually before cutover."
-  type        = bool
-  default     = false
+variable "gg_auto_start_processes" {
+  description = <<-EOT
+    Start Extract/Replicat immediately after creation.
+
+    false (default, RECOMMENDED): Creates processes in STOPPED state.
+      Post-cutover, run gg_activate_fallback.sh to re-position SCN
+      to current time and start both processes. This avoids accumulating
+      stale redo logs between Terraform apply and actual cutover.
+
+    true: Start immediately (for testing or when cutover is imminent).
+  EOT
+  type    = bool
+  default = false
 }
 
 # ----------------------------------------------------------------------------

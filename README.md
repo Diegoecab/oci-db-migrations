@@ -90,7 +90,7 @@ flowchart TD
     E -- No --> N[Event + Notification]
     F -- Yes --> G[3. Start Migration]
     F -- No --> G
-    G --> GG{auto_start_fallback?}
+    G --> GG{gg_auto_start\n_processes?}
     GG -- Yes --> GG_RUN[GG Reverse Replication created\nand started immediately\nTarget → Source]
     GG -- No --> GG_STOP[GG Reverse Replication created\nin stopped state]
     GG_RUN --> H
@@ -126,15 +126,15 @@ This package provisions a **standalone OCI GoldenGate deployment** alongside the
 2. **Creates Extract and Replicat processes** via the GoldenGate REST API, pre-configured with the correct schema mappings derived from the migration's object lists
 3. **Generates parameter files** (`gg-config/extract-*.prm`, `gg-config/replicat-*.prm`) with TABLE/MAP rules matching the migrated schemas
 
-By default, these processes are created in a **stopped state** — ready to be activated manually at any point before or after cutover. If `auto_start_fallback = true`, the processes are created and **started immediately**, so reverse replication is already running before cutover begins.
+By default, these processes are created in a **stopped state** — ready to be activated manually at any point before or after cutover. If `gg_auto_start_processes = true` (or per-migration `auto_start_gg_processes = true`), the processes are created and **started immediately**, so reverse replication is already running before cutover begins.
 
 ### When to Activate Fallback
 
 There are two approaches depending on your configuration:
 
-**Option A — Auto-start (`auto_start_fallback = true`)**: GoldenGate Extract and Replicat processes start automatically after creation. Reverse replication (Target → Source) is already running when you reach the cutover step. No manual activation needed.
+**Option A — Auto-start (`gg_auto_start_processes = true`)**: GoldenGate Extract and Replicat processes start automatically after creation. Reverse replication (Target → Source) is already running when you reach the cutover step. No manual activation needed.
 
-**Option B — Manual activation (`auto_start_fallback = false`, default)**: Processes are created in stopped state. Activate them manually before cutover:
+**Option B — Manual activation (`gg_auto_start_processes = false`, default, RECOMMENDED)**: Processes are created in stopped state. Post-cutover, run `gg_activate_fallback.sh` to re-position SCN to current time and start both processes. This avoids accumulating stale redo logs between Terraform apply and actual cutover. Alternatively, activate manually before cutover:
 
 ```bash
 # Via migration-utility.sh (Option 11)
@@ -149,8 +149,8 @@ There are two approaches depending on your configuration:
 Enable fallback per migration and control when processes start:
 
 ```hcl
-# Global default: GG fallback processes created in stopped state
-auto_start_fallback_replication = false
+# Global default: GG fallback processes created in stopped state (RECOMMENDED)
+gg_auto_start_processes = false
 
 migrations = {
   hr_migration = {
@@ -160,7 +160,7 @@ migrations = {
     target_db_key             = "adb_prod"
     include_allow_objects      = ["HR.*"]
     enable_reverse_replication = true   # ← enables the fallback path
-    auto_start_fallback        = true   # ← override: start GG processes immediately
+    auto_start_gg_processes    = true   # ← override: start GG processes immediately
   }
 }
 ```
