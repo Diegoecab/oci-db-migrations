@@ -79,40 +79,28 @@ This Terraform package provisions and orchestrates a complete Oracle database mi
 
 ## Migration and Cutover Flow
 
-```
- (1) Terraform Apply
-    │
-    ▼
-(2) DMS Migration Created
-    │
-    ├─ Optional Auto-Validate
-    │     ├─ Success → Optional Auto-Start
-    │     └─ Failure → Event + Notification
-    │
-    ▼
-(3) Initial Load (Data Pump)
-    Source → Object Storage → Target ADB
-    │
-    ▼
-(4) Forward CDC (Online Replication)
-    Source ───────────────► Target
-    │
-    ▼
-(5) Pre-Cutover Validation
-    │
-    ▼
-(6) Migration Fallback Activation (Optional)                  ┐
-    Target ───────────────► Source                             │ GoldenGate reverse
-    Enables rollback to source if issues arise post-cutover   │ replication provides
-    via pre-configured GoldenGate Extract + Replicat          │ a safety net before
-    │                                                         │ committing to cutover
-    ▼                                                         ┘
-(7) Cutover (Resume Migration)
-    │
-    ▼
-(8) Post-Cutover Monitoring
-    If rollback needed → start GoldenGate fallback processes
-    to replicate data back from Target ADB to Source DB
+```mermaid
+flowchart TD
+    A([1. Terraform Apply]) --> B[2. DMS Migration Created]
+    B --> C{Auto-Validate?}
+    C -- Yes --> D[Validate Migration]
+    C -- No --> G
+    D --> E{Success?}
+    E -- Yes --> F{Auto-Start?}
+    E -- No --> N[Event + Notification]
+    F -- Yes --> G[3. Start Migration]
+    F -- No --> G
+    G --> H[4. Initial Load - Data Pump\nSource → Object Storage → Target ADB]
+    H --> I[5. Forward CDC - Online Replication\nSource → Target]
+    I --> J[6. Pre-Cutover Validation]
+    J --> K{Fallback\nEnabled?}
+    K -- Yes --> L[Activate GG Reverse Replication\nTarget → Source]
+    K -- No --> M
+    L --> M[7. Cutover - Resume Migration]
+    M --> O[8. Post-Cutover Monitoring]
+    O --> P{Rollback\nNeeded?}
+    P -- Yes --> Q[Start GG Fallback Processes\nTarget ADB → Source DB]
+    P -- No --> R([Migration Complete])
 ```
 
 ---
