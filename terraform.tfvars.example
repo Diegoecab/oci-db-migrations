@@ -1,132 +1,215 @@
 # ============================================================================
 # terraform.tfvars.example
 # Copy to terraform.tfvars and fill in your values.
+#
+# Project: OCI Database Migrations (DMS + GoldenGate Fallback)
+# Repo:    https://github.com/Diegoecab/oci-db-migrations
 # ============================================================================
 
-# --- OCI Authentication ---
-tenancy_ocid     = "ocid1.tenancy.oc1..aaaaaa..."
-user_ocid        = "ocid1.user.oc1..aaaaaa..."
-fingerprint      = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║ OCI AUTHENTICATION                                                       ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+tenancy_ocid     = "ocid1.tenancy.oc1..aaaa..."
+user_ocid        = "ocid1.user.oc1..aaaa..."
+fingerprint      = "53:32:8c:..."
 private_key_path = "~/.oci/oci_api_key.pem"
 region           = "us-ashburn-1"
-compartment_ocid = "ocid1.compartment.oc1..aaaaaa..."
+compartment_ocid = "ocid1.compartment.oc1..aaaa..."
 
-# --- Network (private subnet) ---
-vcn_ocid            = "ocid1.vcn.oc1.iad.aaaaaa..."
-private_subnet_ocid = "ocid1.subnet.oc1.iad.aaaaaa..."
-nsg_ids             = []  # Additional NSGs (auto-created migration NSG is always added)
 
-# --- Vault ---
-vault_ocid     = "ocid1.vault.oc1.iad.aaaaaa..."
-vault_key_ocid = "ocid1.key.oc1.iad.aaaaaa..."
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║ NETWORK                                                                  ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
 
-# ============================================================================
-# SOURCE DATABASES
-# Define each unique source once. Migrations reference by key.
-# ============================================================================
-source_databases = {
-  aws_oracle_prod = {
-    display_name = "AWS Oracle Production"
-    host         = "10.0.1.100"               # IP for connection string
-    hostname     = "oracledb.example.com"      # FQDN (required by GoldenGate)
+vcn_ocid            = "ocid1.vcn.oc1.iad.aaaa..."
+private_subnet_ocid = "ocid1.subnet.oc1.iad.aaaa..."
+nsg_ids             = []   # Network Security Group OCIDs (optional)
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║ VAULT (for storing secrets: DB passwords, GG credentials)                ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+vault_ocid     = "ocid1.vault.oc1.iad..."
+vault_key_ocid = "ocid1.key.oc1.iad..."
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║ SOURCE DATABASES                                                         ║
+# ╠════════════════════════════════════════════════════════════════════════════╣
+# ║ Define source database connections. Each source needs:                   ║
+# ║  - A PDB connection (used by DMS for Data Pump + GoldenGate)             ║
+# ║  - A CDB connection (used by DMS for container-level operations)         ║
+# ║ Multiple migrations can reference the same source.                       ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+# CDB (Root Container) — required for supplemental logging setup
+source_container_databases = {
+  awsoracleprodcdb = {
+    display_name = "AWS Oracle Prod CDB (Root)"
+    host         = "10.0.1.48"
     port         = 1521
-    service_name = "ORCL"
-    username     = "dms_admin"
-    password     = "SecureSourcePassword123!"
-    gg_username  = "GGADMIN"
-    gg_password  = "GGSourcePassword123!"
+    service_name = "EC2_DB.sb1.ec2vcn.oraclevcn.com"
+    username     = "SYSTEM"
+    password     = "ChangeMe123#"
   }
-
-  # Uncomment for a second source database:
-  # aws_oracle_dev = {
-  #   display_name = "AWS Oracle Dev"
-  #   host         = "10.0.2.50"
-  #   hostname     = "oracledev.example.com"
-  #   service_name = "DEVDB"
-  #   username     = "dms_admin"
-  #   password     = "SecureDevPassword123!"
-  #   gg_username  = "GGADMIN"
-  #   gg_password  = "GGDevPassword123!"
-  # }
 }
 
-# ============================================================================
-# TARGET DATABASES (ADB with private endpoint)
-# Define each unique target ADB once. Migrations reference by key.
-# ============================================================================
+# PDB (Pluggable Database) — main source for migration
+source_databases = {
+  awsoracleprod = {
+    display_name = "AWS Oracle Production"
+    host         = "10.0.1.48"
+    hostname     = "db.sb1.ec2vcn.oraclevcn.com"
+    port         = 1521
+    service_name = "EC2_EC2_PDB1.paas.oracle.com"
+    username     = "GGADMIN"
+    password     = "ChangeMe123#"
+    gg_username  = "GGADMIN"     # GoldenGate admin user on source
+    gg_password  = "ChangeMe123#"
+  }
+}
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║ TARGET DATABASES                                                         ║
+# ╠════════════════════════════════════════════════════════════════════════════╣
+# ║ ADB targets with private endpoint.                                       ║
+# ║ Multiple targets can be defined for different migration scenarios.        ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 target_databases = {
-  adb_prod = {
-    display_name = "ADB Production"
-    adb_ocid     = "ocid1.autonomousdatabase.oc1.iad.aaaaaa..."
+  adbprod = {
+    display_name = "ADB Production 19c"
+    adb_ocid     = "ocid1.autonomousdatabase.oc1.iad.aaaa..."
     username     = "ADMIN"
-    password     = "SecureADBPassword123!"
+    password     = "ChangeMe123#_ADB"
     gg_username  = "GGADMIN"
-    gg_password  = "GGAdbPassword123!"
+    gg_password  = "ChangeMe123#_ADB"
   }
-
-  # Uncomment for a second target ADB:
-  # adb_staging = {
-  #   display_name = "ADB Staging"
-  #   adb_ocid     = "ocid1.autonomousdatabase.oc1.iad.bbbbbb..."
-  #   username     = "ADMIN"
-  #   password     = "SecureStagingPassword123!"
-  #   gg_username  = "GGADMIN"
-  #   gg_password  = "GGStagingPassword123!"
-  # }
+  adbprod26ai = {
+    display_name = "ADB Production 26ai"
+    adb_ocid     = "ocid1.autonomousdatabase.oc1.iad.aaaa..."
+    username     = "ADMIN"
+    password     = "ChangeMe123#_ADB"
+    gg_username  = "GGADMIN"
+    gg_password  = "ChangeMe123#_ADB"
+  }
 }
 
-# ============================================================================
-# MIGRATIONS
-# Each references a source and target by key + its own schema list.
-# Multiple migrations can share the same source or target.
-# ============================================================================
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║ OBJECT STORAGE + DATA PUMP                                               ║
+# ╠════════════════════════════════════════════════════════════════════════════╣
+# ║ DMS uses Object Storage to transfer Data Pump dumps from source to ADB.  ║
+# ║ The bucket must exist and be accessible from the DMS agent.              ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+object_storage_bucket    = "migration-dms-bucket"
+object_storage_namespace = ""  # Leave empty to auto-detect via data source
+
+source_export_directory_object_name = "DATA_PUMP_DIR"
+source_export_directory_object_path = "/u01/app/oracle/admin/ORCL/dpdump/<PDB_GUID>"
+
+source_db_ssl_wallet_path = "/u01/app/oracle/wallet"
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║ MIGRATIONS                                                               ║
+# ╠════════════════════════════════════════════════════════════════════════════╣
+# ║ Each migration references a source + target by key, and defines its      ║
+# ║ own scope of objects (schemas/tables).                                   ║
+# ║                                                                          ║
+# ║ Object selection format in include_allow_objects:                        ║
+# ║   "SCHEMA.*"           → entire schema (all objects)                     ║
+# ║   "SCHEMA.TABLE_NAME"  → specific table                                 ║
+# ║                                                                          ║
+# ║ Multiple migrations can share the same source/target and run in          ║
+# ║ parallel if they operate on different schemas/tables.                    ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 migrations = {
-  hr_migration = {
-    display_name   = "HR Schema - AWS to ADB"
-    migration_type = "ONLINE"
-    source_db_key  = "aws_oracle_prod"
-    target_db_key  = "adb_prod"
 
-    schemas_to_migrate = ["HR"]
-    exclude_objects    = ["HR.TMP_%", "HR.BACKUP_%"]
+  # --- Example 1: Full schema migration ---
+  schema_migration = {
+    display_name         = "Full Schema - TESTUSER - AWS to ADB 19c"
+    migration_type       = "ONLINE"            # ONLINE (CDC) or OFFLINE (Data Pump only)
+    database_combination = "ORACLE"            # ORACLE for Oracle-to-Oracle
+    source_db_key        = "awsoracleprod"      # Key from source_databases
+    source_cdb_key       = "awsoracleprodcdb"   # Key from source_container_databases
+    target_db_key        = "adbprod"            # Key from target_databases
 
-    enable_reverse_replication = true
-    # auto_validate = true   # Override global default per migration
-    # auto_start    = false
+    include_allow_objects = [
+      "TESTUSER.*"                              # All objects in TESTUSER schema
+    ]
+
+    enable_reverse_replication = true            # DMS-managed reverse replication
   }
 
-  sales_migration = {
-    display_name   = "Sales + Inventory - AWS to ADB"
-    migration_type = "ONLINE"
-    source_db_key  = "aws_oracle_prod"
-    target_db_key  = "adb_prod"
+  # --- Example 2: Specific tables migration ---
+  table_migration = {
+    display_name         = "Tables T_LOAD01_3,4 - AWS to ADB 26ai"
+    migration_type       = "ONLINE"
+    database_combination = "ORACLE"
+    source_db_key        = "awsoracleprod"
+    source_cdb_key       = "awsoracleprodcdb"
+    target_db_key        = "adbprod26ai"
 
-    schemas_to_migrate = ["SALES", "INVENTORY"]
-    exclude_objects    = ["SALES.AUDIT_%"]
+    include_allow_objects = [
+      "TESTUSER2.T_LOAD01_3",
+      "TESTUSER2.T_LOAD01_4"
+    ]
 
     enable_reverse_replication = true
   }
-
-  # Example: different source to different target
-  # finance_migration = {
-  #   display_name   = "Finance - Dev to Staging"
-  #   migration_type = "OFFLINE"
-  #   source_db_key  = "aws_oracle_dev"
-  #   target_db_key  = "adb_staging"
-  #   schemas_to_migrate = ["FINANCE", "GL"]
-  #   enable_reverse_replication = false
-  # }
 }
 
-# --- GoldenGate Deployment (shared) ---
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║ DMS EXECUTION CONTROL                                                    ║
+# ╠════════════════════════════════════════════════════════════════════════════╣
+# ║ Controls whether Terraform automatically validates and starts the        ║
+# ║ migration after creation.                                                ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+auto_validate_migration = true   # Run DMS validation on apply
+auto_start_migration    = true   # Start migration after validation
+
+# Increment to force re-execution of validate/start on next apply.
+# Useful when re-enabling auto_start_migration after a pause.
+force_rerun_validate_start = "1"
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║ GOLDENGATE DEPLOYMENT (Fallback Replication)                             ║
+# ╠════════════════════════════════════════════════════════════════════════════╣
+# ║ Independent GG deployment for reverse/fallback replication               ║
+# ║ (ADB → on-premises). Separate from the DMS-managed GG deployment.       ║
+# ║                                                                          ║
+# ║ This deployment is used ONLY for fallback (rollback scenario).           ║
+# ║ DMS manages its own GG deployment for forward replication.               ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 goldengate_display_name            = "oci-gg-deployment"
 goldengate_admin_username          = "oggadmin"
 goldengate_admin_password          = "SecureGGPassword123!"
-goldengate_license_model           = "BRING_YOUR_OWN_LICENSE"
+goldengate_license_model           = "BRING_YOUR_OWN_LICENSE"  # or LICENSE_INCLUDED
 goldengate_cpu_core_count          = 1
-goldengate_is_auto_scaling_enabled = false
+goldengate_is_auto_scaling_enabled = true
 
-# --- GoldenGate Extract/Replicat ---
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║ GOLDENGATE PROCESSES (Extract + Replicat)                                ║
+# ╠════════════════════════════════════════════════════════════════════════════╣
+# ║ Extract:  Captures changes FROM ADB (source for fallback)               ║
+# ║ Replicat: Applies changes TO on-premises (target for fallback)           ║
+# ║                                                                          ║
+# ║ IMPORTANT: gg_auto_start_processes controls whether processes start      ║
+# ║ immediately on creation or remain STOPPED for post-cutover activation.   ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 extract_config = {
   extract_name  = "EXTADB"
   extract_type  = "INTEGRATED"
@@ -134,37 +217,85 @@ extract_config = {
   trail_name    = "EA"
   trail_size_mb = 500
 }
+
 replicat_config = {
   replicat_name   = "REPAWS"
   replicat_type   = "PARALLEL"
   map_parallelism = 4
   bulk_applies    = true
 }
-gg_schemas_to_replicate = ["HR", "SALES", "INVENTORY"]
+
+# Schemas/tables to replicate in fallback direction (ADB → on-prem)
+gg_schemas_to_replicate = ["TESTUSER"]
 gg_exclude_tables       = ["*.TMP_%", "*.TEMP_%", "*.LOG_%"]
 
-# --- DMS Execution Control ---
-auto_validate_migration = true
-auto_start_migration    = false
+# --- Loop Prevention ---
+# EXCLUDEUSER prevents the fallback Extract from capturing changes made by
+# GGADMIN in ADB (which are DMS forward replication writes). This breaks
+# the echo-back loop when both DMS and fallback are configured.
+gg_exclude_users = ["GGADMIN"]
 
-# --- Pre-Cutover Validation ---
+# --- Process Startup Behavior ---
+# false (RECOMMENDED for production):
+#   Creates Extract/Replicat in STOPPED state. Post-cutover, run
+#   scripts/gg_activate_fallback.sh to re-position SCN to current
+#   time and start both processes. This avoids accumulating stale
+#   redo logs between Terraform apply and actual cutover.
+#
+# true (for testing / when cutover is imminent):
+#   Starts processes immediately on creation. Extract begins capturing
+#   from the SCN at creation time.
+gg_auto_start_processes = false
+
+# Increment to force recreation of GG processes on next apply.
+# Example: change to "run-2" after modifying extract/replicat config.
+gg_process_rerun_token = "run-1"
+
+# --- Checkpoint Table ---
+# Replicat checkpoint table on the on-premises (target) database.
+# Created automatically if gg_auto_create_checkpoint = true.
+gg_auto_create_checkpoint = true
+gg_checkpoint_table       = "GGADMIN.GG_CHECKPOINT"
+oracle_home               = "/usr/lib/oracle/23/client64"  # Required for checkpoint script (NNE)
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║ PRE-CUTOVER VALIDATION                                                   ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 pre_cutover_validation_enabled = true
 pre_cutover_max_lag_seconds    = 30
 
-# --- Monitoring (Enterprise) ---
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║ MONITORING & NOTIFICATIONS                                               ║
+# ╠════════════════════════════════════════════════════════════════════════════╣
+# ║ OCI Events + Notification Service for migration status alerts.           ║
+# ║ Requires an existing ONS topic.                                          ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 enable_monitoring              = true
 enable_dms_event_notifications = true
-lag_threshold_seconds          = 60    # WARNING
-lag_critical_threshold_seconds = 300   # CRITICAL
-notification_topic_ocid        = null  # "ocid1.onstopic.oc1.iad.aaaaaa..."
+lag_threshold_seconds          = 60    # WARNING level
+lag_critical_threshold_seconds = 300   # CRITICAL level
+notification_topic_ocid        = "ocid1.onstopic.oc1.iad.aaaa..."
 
-# --- Logging ---
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║ LOGGING                                                                  ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 enable_log_analytics = false
-# log_group_ocid     = "ocid1.loggroup.oc1.iad.aaaaaa..."
+# log_group_ocid     = "ocid1.loggroup.oc1.iad.aaaa..."
 
-# --- Tags ---
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║ TAGS                                                                     ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 freeform_tags = {
   "Project"     = "database-migration"
   "ManagedBy"   = "terraform"
   "Environment" = "production"
 }
+

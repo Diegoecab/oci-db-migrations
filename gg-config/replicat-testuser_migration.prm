@@ -1,5 +1,0 @@
--- Auto-generated
-REPLICAT RP5881BD
-USERIDALIAS gg-src-aws_oracle_prod
-DISCARDFILE ./dirrpt/RP5881BD_discard.txt, PURGE
-MAP TESTUSER.*, TARGET TESTUSER.*;
