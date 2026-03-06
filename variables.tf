@@ -432,21 +432,6 @@ variable "gg_exclude_users" {
   default = ["GGADMIN"]
 }
 
-variable "gg_auto_start_processes" {
-  description = <<-EOT
-    Start Extract/Replicat immediately after creation.
-    
-    false (default, RECOMMENDED): Creates processes in STOPPED state.
-      Post-cutover, run gg_activate_fallback.sh to re-position SCN
-      to current time and start both processes. This avoids accumulating
-      stale redo logs between Terraform apply and actual cutover.
-    
-    true: Start immediately (for testing or when cutover is imminent).
-  EOT
-  type    = bool
-  default = false
-}
-
 variable "gg_checkpoint_table" {
   description = <<-EOT
     Checkpoint table for Replicat recovery tracking.

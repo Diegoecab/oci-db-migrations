@@ -150,9 +150,10 @@ resource "oci_golden_gate_database_registration" "adb" {
   username       = var.target_databases[each.key].gg_username
   password       = var.target_databases[each.key].gg_password
 
-  fqdn = lower(try(
-    regex("host=([^)]+)", data.oci_database_autonomous_database.target_adb[each.key].connection_strings[0].all_connection_strings["HIGH"])[0],
-    "${data.oci_database_autonomous_database.target_adb[each.key].db_name}.adb.${var.region}.oraclecloud.com"
+  fqdn = lower(coalesce(
+    try(regex("host=([^)]+)", data.oci_database_autonomous_database.target_adb[each.key].connection_strings[0].all_connection_strings["HIGH"])[0], null),
+    try("${data.oci_database_autonomous_database.target_adb[each.key].db_name}.adb.${var.region}.oraclecloud.com", null),
+    "${each.key}.adb.${var.region}.oraclecloud.com"
   ))
 
   depends_on = [time_sleep.wait_for_connections]

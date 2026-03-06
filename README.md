@@ -195,6 +195,112 @@ migrations = {
 - Autonomous Database (target) with private endpoint
 - ONS Notification Topic (optional, for alerts)
 
+### OCI IAM Policies (Required)
+
+The following IAM policies must be created in your OCI tenancy before running `terraform apply`. Replace `<group-name>` with your IAM group and `<compartment-name>` with your target compartment.
+
+> **Identity Domains**: If your tenancy uses OCI Identity Domains, prefix the group name with the domain: `'Default'/'<group-name>'`. Example:
+> ```
+> Allow group 'Default'/'dms-admins' to manage odms-family in compartment my-compartment
+> ```
+>
+> **Nested compartments**: If your compartment is nested, use the full path separated by colons:
+> ```
+> Allow group 'Default'/'dms-admins' to manage odms-family in compartment parent:child:target-compartment
+> ```
+>
+> **Note**: Policies can be created in the **target compartment or any ancestor compartment** (including the root/tenancy). The creating user must have `manage policies` in that compartment.
+
+#### User/Group Policies
+
+**Database Migration Service (DMS)**:
+```
+Allow group <group-name> to manage odms-family in compartment <compartment-name>
+```
+
+> `odms-family` is the aggregate resource type that includes `odms-connections`, `odms-migrations`, and `odms-jobs`. Alternatively, grant them individually for least privilege:
+> ```
+> Allow group <group-name> to manage odms-connection in compartment <compartment-name>
+> Allow group <group-name> to manage odms-migration in compartment <compartment-name>
+> Allow group <group-name> to manage odms-job in compartment <compartment-name>
+> ```
+
+**OCI GoldenGate**:
+```
+Allow group <group-name> to manage goldengate-family in compartment <compartment-name>
+```
+
+> `goldengate-family` includes `goldengate-deployments`, `goldengate-connections`, `goldengate-connection-assignments`, `goldengate-deployment-backups`, `goldengate-deployment-upgrades`, and `goldengate-pipelines`.
+
+**Networking** (VCN and subnet are pre-existing; Terraform only creates an NSG and its rules):
+```
+Allow group <group-name> to use virtual-network-family in compartment <compartment-name>
+Allow group <group-name> to manage network-security-groups in compartment <compartment-name>
+```
+
+**OCI Vault (Secrets & Keys)**:
+```
+Allow group <group-name> to manage vaults in compartment <compartment-name>
+Allow group <group-name> to manage keys in compartment <compartment-name>
+Allow group <group-name> to manage secret-family in compartment <compartment-name>
+```
+
+**Object Storage (Data Pump staging)**:
+```
+Allow group <group-name> to manage object-family in compartment <compartment-name>
+```
+
+**Autonomous Database (target)**:
+```
+Allow group <group-name> to read autonomous-database-family in compartment <compartment-name>
+Allow group <group-name> to read database-family in compartment <compartment-name>
+```
+
+**Monitoring & Alarms** (if `enable_monitoring = true`):
+```
+Allow group <group-name> to manage alarms in compartment <compartment-name>
+Allow group <group-name> to read metrics in compartment <compartment-name>
+```
+
+**Events & Notifications** (if `enable_dms_event_notifications = true`):
+```
+Allow group <group-name> to manage cloudevents-rules in compartment <compartment-name>
+Allow group <group-name> to manage ons-topics in compartment <compartment-name>
+Allow group <group-name> to manage ons-subscriptions in compartment <compartment-name>
+```
+
+**Logging** (if `enable_log_analytics = true`):
+```
+Allow group <group-name> to manage logging-family in compartment <compartment-name>
+```
+
+**Tags**:
+```
+Allow group <group-name> to manage tag-namespaces in compartment <compartment-name>
+```
+
+#### Dynamic Group & Service Policies
+
+Create a dynamic group for GoldenGate deployments:
+```
+Name: GoldenGateDeployments
+Matching rule: ALL {resource.type = 'goldengatedeployment', resource.compartment.id = '<compartment-ocid>'}
+```
+
+Then grant the dynamic group access to secrets and vault:
+```
+Allow dynamic-group GoldenGateDeployments to read secret-bundles in compartment <compartment-name>
+Allow dynamic-group GoldenGateDeployments to use keys in compartment <compartment-name>
+Allow dynamic-group GoldenGateDeployments to use vaults in compartment <compartment-name>
+```
+
+GoldenGate service policy for identity validation:
+```
+Allow service goldengate to {idcs_user_viewer, domain_resources_viewer} in tenancy
+```
+
+> **Reference**: [OCI GoldenGate IAM Policies](https://docs.oracle.com/en-us/iaas/goldengate/doc/policies.html) | [OCI Common Policies](https://docs.oracle.com/en-us/iaas/Content/Identity/Concepts/commonpolicies.htm)
+
 ### Source and Target Database Preparation
 
 ```bash
@@ -583,6 +689,7 @@ This displays guidance for:
 | OCI Provider v8 errors | Pin to `~> 7.0` in provider.tf |
 | OCI CLI hangs | migration-utility.sh uses timeout protection (12s/30s) |
 | GG process name conflicts | Names auto-generated via MD5 hash (8-char limit) |
+| `401-NotAuthenticated` / Failed to verify HTTP(S) Signature | Verify `private_key_path` points to a valid, accessible PEM file. On WSL2, use the Linux-native path (e.g. `~/.oci/oci_api_key.pem`) — Windows paths like `C:\Users\...` won't work. Also confirm `fingerprint` matches the key in OCI Console (Identity > Users > API Keys) and check for clock skew (`sudo hwclock -s`) |
 
 ---
 
